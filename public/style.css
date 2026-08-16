@@ -70,10 +70,13 @@ body, html {
     align-items: center;
 }
 
+/* Editorial Brand Title — Syne 800 */
 .brand-title {
-    font-size: 1.1rem;
-    font-weight: 700;
-    letter-spacing: 3px;
+    font-family: 'Syne', sans-serif;
+    font-size: 1.35rem;
+    font-weight: 800;
+    letter-spacing: 5px;
+    text-transform: uppercase;
 }
 
 .hud-actions {
