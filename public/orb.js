@@ -21,7 +21,7 @@ resize();
 const POINT_COUNT = 1400;
 const R0 = 230; // Constant base radius (px)
 const nodes = [];
-const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5)); // ~2.399963 rad
 
 for (let i = 0; i < POINT_COUNT; i++) {
     const y = 1 - (i / (POINT_COUNT - 1)) * 2;
@@ -38,7 +38,7 @@ for (let i = 0; i < POINT_COUNT; i++) {
     });
 }
 
-// Ordered glyph density: deep background (dim dust) → high-contrast foreground
+// Ordered glyph density from background to high-contrast foreground
 const ASCII_CHARS = ['·', '.', ':', '+', 'x', '*', '%', '0', '#', '@'];
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -46,18 +46,23 @@ const ASCII_CHARS = ['·', '.', ':', '+', 'x', '*', '%', '0', '#', '@'];
 // ═══════════════════════════════════════════════════════════════════════════
 let orbCenter = { x: width / 2, y: height / 2 };
 let targetOrbCenter = { x: width / 2, y: height / 2 };
-let rotX = 0, rotY = 0;
-let targetRotX = 0, targetRotY = 0;
-let angularVelX = 0, angularVelY = 0;
+let rotX = 0, rotY = 0, rotZ = 0;
+let targetRotX = 0, targetRotY = 0, targetRotZ = 0;
+let angularVelX = 0, angularVelY = 0, angularVelZ = 0;
 let currentScale = 1.0;
 let targetScale = 1.0;
 
-// Gesture interaction state anchors
-let gestureState = 'IDLE'; // IDLE | HOVER | GRAB | DUAL_GRAB | SLAP
+// Gesture interaction state machine
+let gestureState = 'IDLE'; // IDLE | HOVER | GRAB | COMPRESS | DUAL_MOLD | SLAP
 let anchorHand = { x: 0, y: 0, depth: 1.0 };
 let anchorOrbPos = { x: width / 2, y: height / 2 };
 let anchorScale = 1.0;
 let anchorDualDist = 0.0;
+
+// Bloom Shockwave Dynamics
+let bloomActive = false;
+let bloomStartTime = 0;
+const BLOOM_DURATION = 0.6; // seconds
 
 let currentTheme = 'dark';
 let sensitivity = 1.5;
@@ -76,13 +81,13 @@ let ambientNoiseFloor = 0.012;
 function initAudio() {
     if (audioCtx) return;
     try {
-        const AC = window.AudioContext || window.webkitAudioContext;
-        audioCtx = new AC();
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AudioContextClass();
 
         // Extended vocal bandpass (180Hz – 4200Hz, Q = 0.65)
         biquadFilter = audioCtx.createBiquadFilter();
         biquadFilter.type = 'bandpass';
-        biquadFilter.frequency.value = 2190;  // geometric mean of 180 & 4200
+        biquadFilter.frequency.value = 2190;
         biquadFilter.Q.value = 0.65;
 
         analyser = audioCtx.createAnalyser();
@@ -120,12 +125,12 @@ function updateAudioEnergy() {
     // Adaptive ambient noise floor tracking
     ambientNoiseFloor = ambientNoiseFloor * 0.993 + rawEnergy * 0.007;
 
-    // Lowered SNR gate: 1.4x ambient threshold for responsive vocal reactivity
+    // Responsive 1.4x SNR baseline gate
     let gatedEnergy = 0.0;
     const gateThreshold = ambientNoiseFloor * 1.4;
     if (rawEnergy > gateThreshold) {
-        // Amplified baseline gain 2.4x
-        gatedEnergy = Math.min((rawEnergy - gateThreshold) * sensitivity * 2.4, 1.0);
+        // Boosted baseline sensitivity gain (2.4 * 1.8 ~ 4.32x)
+        gatedEnergy = Math.min((rawEnergy - gateThreshold) * sensitivity * 4.32, 1.0);
     }
 
     // Low-pass audio smoothing
@@ -133,7 +138,7 @@ function updateAudioEnergy() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 4. WEBSOCKET TELEMETRY CLIENT
+// 4. DEDICATED 5-STATE GESTURE RECOGNITION (WebSocket)
 // ═══════════════════════════════════════════════════════════════════════════
 function connectWS() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -148,28 +153,37 @@ function connectWS() {
             const data = JSON.parse(e.data);
             const handCount = data.hands ? data.hands.length : 0;
 
-            // Strict footer format: `${count} HAND${count === 1 ? '' : 'S'}`
+            // Streamlined footer
             handsMeter.innerText = `${handCount} HAND${handCount === 1 ? '' : 'S'}`;
+
+            // Check Shockwave Bloom trigger from telemetry
+            if (data.bloom) {
+                bloomActive = true;
+                bloomStartTime = performance.now() / 1000;
+            }
 
             if (handCount > 0) {
                 hasHands = true;
                 const primary = data.hands[0];
 
-                // ── STATE: DUAL GRAB ────────────────────────────────────
-                if (data.dual_pinch && data.hands.length >= 2) {
-                    if (gestureState !== 'DUAL_GRAB') {
-                        gestureState = 'DUAL_GRAB';
-                        anchorDualDist = Math.max(data.two_hand_dist, 0.05);
-                        anchorOrbPos = { ...orbCenter };
-                        anchorScale = currentScale;
+                // ── STATE 5: DUAL-HAND VOLUMETRIC MOLDING ───────────────
+                if (data.hands.length >= 2) {
+                    gestureState = 'DUAL_MOLD';
+                    if (data.dual_pinch) {
+                        targetOrbCenter.x = data.dual_pinch_center.x * width;
+                        targetOrbCenter.y = data.dual_pinch_center.y * height;
                     }
-                    targetOrbCenter.x = data.dual_pinch_center.x * width;
-                    targetOrbCenter.y = data.dual_pinch_center.y * height;
 
-                    const distRatio = data.two_hand_dist / anchorDualDist;
-                    targetScale = Math.min(Math.max(anchorScale * distRatio, 0.35), 2.5);
+                    // Palm span scales sphere radius from 0.5x to 2.5x
+                    if (data.two_hand_dist > 0) {
+                        targetScale = THREE_MAP(data.two_hand_dist, 0.12, 0.65, 0.5, 2.5);
+                    }
+                    // Relative angle steers roll/yaw of 3D axis
+                    if (data.dual_angle !== undefined) {
+                        targetRotZ = data.dual_angle * 0.8;
+                    }
                 }
-                // ── STATE: PHYSICAL GRAB (Single Pinch) ─────────────────
+                // ── STATE 2: PHYSICAL LOCK & DRAG (Single Pinch) ────────
                 else if (primary.is_pinching) {
                     if (gestureState !== 'GRAB') {
                         gestureState = 'GRAB';
@@ -181,46 +195,53 @@ function connectWS() {
                         anchorOrbPos = { ...orbCenter };
                         anchorScale = currentScale;
                     }
-                    // Translate orb X/Y with hand delta
                     const dx = (primary.palm_x - anchorHand.x) * width * 1.3;
                     const dy = (primary.palm_y - anchorHand.y) * height * 1.3;
                     targetOrbCenter.x = anchorOrbPos.x + dx;
                     targetOrbCenter.y = anchorOrbPos.y + dy;
 
-                    // Scale Z proportionally to depth with spring damping
                     const depthRatio = (primary.depth_scale || 1.0) / anchorHand.depth;
-                    targetScale = Math.min(Math.max(anchorScale * depthRatio * 0.85, 0.3), 2.2);
+                    targetScale = Math.min(Math.max(anchorScale * depthRatio * 0.85, 0.35), 2.2);
                 }
-                // ── STATE: HOVER (Open Hand Parallax) ───────────────────
-                else {
+                // ── STATE 3: FIST SQUEEZE & COMPRESS ────────────────────
+                else if (primary.is_fist || data.compress) {
+                    gestureState = 'COMPRESS';
+                    targetScale = 0.70; // Smoothly contract to 0.70x
+                    targetRotY = (primary.palm_x - 0.5) * 1.5;
+                    targetRotX = (primary.palm_y - 0.5) * 1.5;
+                }
+                // ── STATE 1: MAGNETIC HOVER (Single Open Palm) ──────────
+                else if (primary.is_open) {
                     gestureState = 'HOVER';
+                    targetScale = primary.depth_scale || 1.0;
 
-                    // 1:1 orientation mapping from palm Euler angles if available
+                    // 1:1 orientation tracking with palm Euler angles
                     if (primary.pitch !== undefined) {
                         targetRotX = primary.pitch * 1.8;
                         targetRotY = primary.yaw * 1.8;
+                        targetRotZ = primary.roll * 0.6;
                     } else {
-                        targetRotY = (primary.palm_x - 0.5) * 3.2;
-                        targetRotX = (primary.palm_y - 0.5) * 3.2;
+                        targetRotY = (primary.palm_x - 0.5) * 3.0;
+                        targetRotX = (primary.palm_y - 0.5) * 3.0;
                     }
 
-                    if (data.two_hand_dist > 0) {
-                        targetScale = THREE_MAP(data.two_hand_dist, 0.15, 0.7, 0.5, 2.0);
-                    } else {
-                        targetScale = primary.depth_scale || 1.0;
-                    }
-
-                    // Slap / Flick momentum injection
+                    // ── STATE 4: OPEN PALM SLAP / FLICK ─────────────────
                     if (data.slap_impulse && data.slap_impulse.active) {
-                        angularVelY += data.slap_impulse.vx * 0.14;
-                        angularVelX += data.slap_impulse.vy * 0.14;
+                        angularVelY += data.slap_impulse.vx * 0.16;
+                        angularVelX += data.slap_impulse.vy * 0.16;
                     }
+                }
+                else {
+                    gestureState = 'HOVER';
+                    targetRotY = (primary.palm_x - 0.5) * 2.5;
+                    targetRotX = (primary.palm_y - 0.5) * 2.5;
                 }
             } else {
                 // ── STATE: IDLE (No Hands) ──────────────────────────────
                 hasHands = false;
                 gestureState = 'IDLE';
                 targetScale = 1.0;
+                targetRotZ = 0.0;
                 targetOrbCenter.x = width / 2;
                 targetOrbCenter.y = height / 2;
             }
@@ -241,13 +262,22 @@ function THREE_MAP(val, inMin, inMax, outMin, outMax) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 5. UI CONTROLS & SEGMENTED BUTTON SYNCHRONIZATION
+// 5. UI CONTROLS & INTERACTIVE GESTURE ACCORDION MANUAL
 // ═══════════════════════════════════════════════════════════════════════════
 const settingsDrawer = document.getElementById('settings-drawer');
 document.getElementById('settings-btn').onclick = () => settingsDrawer.classList.add('open');
 document.getElementById('close-settings').onclick = () => settingsDrawer.classList.remove('open');
 
-// Synchronize all segmented groups (.segmented-group > .segmented-btn)
+// Interactive Gesture Manual Accordion Toggle
+const gestureAccordion = document.getElementById('gesture-accordion');
+const gestureToggle = document.getElementById('gesture-toggle');
+if (gestureToggle && gestureAccordion) {
+    gestureToggle.addEventListener('click', () => {
+        gestureAccordion.classList.toggle('expanded');
+    });
+}
+
+// Segmented group synchronizer (.segmented-group > .segmented-btn)
 document.querySelectorAll('.segmented-group').forEach(group => {
     const buttons = group.querySelectorAll('.segmented-btn');
     buttons.forEach(btn => {
@@ -276,7 +306,7 @@ document.getElementById('speed-slider').oninput = (e) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 6. HIGH-PERFORMANCE RENDER LOOP — Amplified Fluid Physics
+// 6. HIGH-PERFORMANCE RENDER LOOP — Shockwaves & Retuned Kinematics
 // ═══════════════════════════════════════════════════════════════════════════
 let time = 0;
 const projectedNodes = new Array(POINT_COUNT);
@@ -286,11 +316,12 @@ for (let i = 0; i < POINT_COUNT; i++) {
 
 function render() {
     requestAnimationFrame(render);
+    const nowSec = performance.now() / 1000;
     time += 0.015 * speedMult;
 
     updateAudioEnergy();
 
-    // Spring-damper kinematics with 0.12 spring factor
+    // Responsive spring-damper position & scale kinematics
     const springK = 0.12;
     orbCenter.x += (targetOrbCenter.x - orbCenter.x) * springK;
     orbCenter.y += (targetOrbCenter.y - orbCenter.y) * springK;
@@ -301,11 +332,26 @@ function render() {
         targetRotY += 0.002 * speedMult;
     }
 
-    rotX += (targetRotX - rotX) * 0.08 + angularVelX;
-    rotY += (targetRotY - rotY) * 0.08 + angularVelY;
-    // Viscous friction decay (0.94)
-    angularVelX *= 0.94;
-    angularVelY *= 0.94;
+    // Smoother Rotational Kinematics: Lerp rate reduced to 0.038 to eliminate abrupt snapping
+    const rotLerp = 0.038;
+    rotX += (targetRotX - rotX) * rotLerp + angularVelX;
+    rotY += (targetRotY - rotY) * rotLerp + angularVelY;
+    rotZ += (targetRotZ - rotZ) * rotLerp + angularVelZ;
+
+    // Graceful viscous friction decay (0.95)
+    angularVelX *= 0.95;
+    angularVelY *= 0.95;
+    angularVelZ *= 0.95;
+
+    // Compute Shockwave Bloom elapsed time
+    let bloomDelta = 0.0;
+    let bloomProgress = 0.0;
+    if (bloomActive) {
+        bloomProgress = nowSec - bloomStartTime;
+        if (bloomProgress >= BLOOM_DURATION) {
+            bloomActive = false;
+        }
+    }
 
     ctx.clearRect(0, 0, width, height);
     ctx.textAlign = 'center';
@@ -313,19 +359,27 @@ function render() {
 
     const cosY = Math.cos(rotY), sinY = Math.sin(rotY);
     const cosX = Math.cos(rotX), sinX = Math.sin(rotX);
+    const cosZ = Math.cos(rotZ), sinZ = Math.sin(rotZ);
 
-    // Expanded deformation bounds [0.85 * R0, 1.22 * R0]
-    const minBound = 0.85 * R0;
-    const maxBound = 1.22 * R0;
+    // Expanded dynamic bounds: [0.80 * R0, 1.30 * R0]
+    const minBound = 0.80 * R0;
+    const maxBound = 1.30 * R0;
+    const isCompress = gestureState === 'COMPRESS';
 
     for (let i = 0; i < POINT_COUNT; i++) {
         const node = nodes[i];
 
-        // Amplified fluid surface-tension harmonics:
-        // delta_r = R0 * [0.012 * sin(2θ + 3φ + t) + smoothAudio * 0.16 * sin(4θ + 3φ + 2.5t)]
+        // Amplified fluid surface-tension harmonics
         const idleWave = 0.012 * Math.sin(2 * node.theta + 3 * node.phi + time);
-        const voiceWave = smoothAudio * 0.16 * Math.sin(4 * node.theta + 3 * node.phi + 2.5 * time);
-        const deltaR = R0 * (idleWave + voiceWave);
+        const voiceWave = smoothAudio * 0.18 * Math.sin(4 * node.theta + 3 * node.phi + 2.5 * time);
+        let deltaR = R0 * (idleWave + voiceWave);
+
+        // Fluid Shockwave Bloom: Delta_r = R0 * 0.35 * exp(-4t) * sin(8*PI*t - 4*phi)
+        if (bloomActive && bloomProgress < BLOOM_DURATION) {
+            const bloomDecay = Math.exp(-4.0 * bloomProgress);
+            const bloomWave = Math.sin(8.0 * Math.PI * bloomProgress - 4.0 * node.phi);
+            deltaR += R0 * 0.35 * bloomDecay * bloomWave;
+        }
 
         // Strict radial boundary clamping
         const clampedR = Math.max(minBound, Math.min(maxBound, R0 + deltaR));
@@ -335,23 +389,29 @@ function render() {
         const ny = node.ny * effectiveR;
         const nz = node.nz * effectiveR;
 
-        // 3D Rotation Transformations
+        // 3D Euler Rotations (Y -> X -> Z)
         const x1 = nx * cosY + nz * sinY;
         const z1 = -nx * sinY + nz * cosY;
         const y2 = ny * cosX - z1 * sinX;
         const z2 = ny * sinX + z1 * cosX;
+        const x3 = x1 * cosZ - y2 * sinZ;
+        const y3 = x1 * sinZ + y2 * cosZ;
 
         // Perspective Projection
         const fov = 580;
         const cameraDist = 420;
         const depth = fov / (fov + z2 + cameraDist);
-        const screenX = orbCenter.x + x1 * depth;
-        const screenY = orbCenter.y + y2 * depth;
+        const screenX = orbCenter.x + x3 * depth;
+        const screenY = orbCenter.y + y3 * depth;
 
-        // Smooth Glyph Density based strictly on projected Z-depth
+        // Projected Z-depth character density (modulated if compressed)
         const normalizedZ = (z2 + (R0 * currentScale)) / (2 * R0 * currentScale + 0.001);
         const clampedZ = Math.max(0, Math.min(1, normalizedZ));
-        const rawGlyphIdx = Math.floor(clampedZ * (ASCII_CHARS.length - 1));
+        const densityMultiplier = isCompress ? 1.4 : 1.0;
+        const rawGlyphIdx = Math.min(
+            ASCII_CHARS.length - 1,
+            Math.floor(clampedZ * densityMultiplier * (ASCII_CHARS.length - 1))
+        );
 
         const p = projectedNodes[i];
         p.x = screenX;
@@ -361,7 +421,7 @@ function render() {
         p.glyphIndex = rawGlyphIdx;
     }
 
-    // Depth Sort (back-to-front)
+    // Depth Sorting (Back-to-front)
     projectedNodes.sort((a, b) => a.z - b.z);
 
     const isDark = currentTheme === 'dark';
