@@ -1,0 +1,295 @@
+:root {
+    --bg: #000000;
+    --text: #ffffff;
+    --text-dim: #71717a;
+    --border: rgba(255, 255, 255, 0.12);
+    --hud-bg: rgba(0, 0, 0, 0.7);
+    --btn-bg: rgba(255, 255, 255, 0.08);
+    --btn-active-bg: #ffffff;
+    --btn-active-text: #000000;
+    --slider-track: #52525b;
+    --slider-thumb: #d4d4d8;
+    --slider-groove: #71717a;
+}
+
+[data-theme="light"] {
+    --bg: #ffffff;
+    --text: #09090b;
+    --text-dim: #a1a1aa;
+    --border: rgba(0, 0, 0, 0.1);
+    --hud-bg: rgba(255, 255, 255, 0.8);
+    --btn-bg: rgba(0, 0, 0, 0.05);
+    --btn-active-bg: #09090b;
+    --btn-active-text: #ffffff;
+    --slider-track: #9e9e9e;
+    --slider-thumb: #18181b;
+    --slider-groove: #52525b;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    user-select: none;
+}
+
+body, html {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background-color: var(--bg);
+    color: var(--text);
+    transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+#ascii-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 1;
+}
+
+.hud {
+    position: relative;
+    z-index: 10;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 2.5rem;
+}
+
+.hud-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.brand-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+    letter-spacing: 3px;
+}
+
+.hud-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    pointer-events: auto;
+}
+
+.status-pill {
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 0.4rem 0.85rem;
+    background: var(--hud-bg);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    letter-spacing: 1px;
+}
+
+.icon-btn {
+    background: var(--hud-bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), background 0.2s;
+}
+
+.icon-btn:hover {
+    transform: rotate(45deg);
+    background: var(--text);
+    color: var(--bg);
+}
+
+.hud-bottom {
+    display: flex;
+    justify-content: center;
+}
+
+.minimal-pill {
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    color: var(--text-dim);
+    background: var(--hud-bg);
+    padding: 0.45rem 1.25rem;
+    border-radius: 30px;
+    border: 1px solid var(--border);
+    backdrop-filter: blur(16px);
+}
+
+/* Settings Drawer */
+.settings-drawer {
+    position: fixed;
+    top: 0;
+    right: -360px;
+    width: 320px;
+    height: 100%;
+    background: var(--hud-bg);
+    border-left: 1px solid var(--border);
+    backdrop-filter: blur(30px);
+    z-index: 100;
+    padding: 2.5rem 2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+    transition: right 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.settings-drawer.open {
+    right: 0;
+}
+
+.drawer-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.drawer-header h3 {
+    font-size: 0.85rem;
+    font-weight: 700;
+    letter-spacing: 2px;
+}
+
+.close-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    font-size: 1.1rem;
+    cursor: pointer;
+}
+
+.settings-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.settings-group label {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--text-dim);
+}
+
+.slider-label-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.slider-val {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text);
+}
+
+/* Dynamic Expanding Segmented Toggles */
+.segmented-group {
+    display: flex;
+    gap: 6px;
+    width: 100%;
+    background: var(--btn-bg);
+    padding: 4px;
+    border-radius: 12px;
+}
+
+.segmented-btn {
+    flex: 1.0;
+    padding: 0.6rem 0.5rem;
+    border-radius: 8px;
+    border: none;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 0.75rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: flex 0.4s cubic-bezier(0.25, 1, 0.5, 1), background-color 0.3s ease, color 0.3s ease, box-shadow 0.3s ease;
+    white-space: nowrap;
+    text-align: center;
+}
+
+.segmented-btn.active {
+    flex: 1.65;
+    background: var(--btn-active-bg);
+    color: var(--btn-active-text);
+    font-weight: 700;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+/* Recessed Capsule Sliders */
+.capsule-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 14px;
+    border-radius: 9999px;
+    background: var(--slider-track);
+    padding: 2px;
+    box-sizing: border-box;
+    outline: none;
+    cursor: pointer;
+}
+
+.capsule-slider::-webkit-slider-runnable-track {
+    height: 14px;
+    border-radius: 9999px;
+    background: var(--slider-track);
+    border: none;
+}
+
+.capsule-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 10px;
+    width: 44px;
+    border-radius: 9999px;
+    background-color: var(--slider-thumb);
+    border: none;
+    background-image: linear-gradient(var(--slider-groove), var(--slider-groove));
+    background-size: 16px 1px;
+    background-position: center;
+    background-repeat: no-repeat;
+    cursor: pointer;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    margin-top: 2px;
+    transition: transform 0.15s ease;
+}
+
+.capsule-slider::-moz-range-track {
+    height: 14px;
+    border-radius: 9999px;
+    background: var(--slider-track);
+    border: none;
+}
+
+.capsule-slider::-moz-range-thumb {
+    height: 10px;
+    width: 44px;
+    border-radius: 9999px;
+    background-color: var(--slider-thumb);
+    border: none;
+    background-image: linear-gradient(var(--slider-groove), var(--slider-groove));
+    background-size: 16px 1px;
+    background-position: center;
+    background-repeat: no-repeat;
+    cursor: pointer;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.capsule-slider::-webkit-slider-thumb:hover,
+.capsule-slider::-moz-range-thumb:hover {
+    transform: scale(1.03);
+}

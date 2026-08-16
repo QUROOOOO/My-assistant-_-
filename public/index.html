@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PIPO</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <canvas id="ascii-canvas"></canvas>
+
+    <div class="hud">
+        <header class="hud-top">
+            <div class="brand">
+                <span class="brand-title">PIPO</span>
+            </div>
+            <div class="hud-actions">
+                <div class="status-pill" id="ws-status">INITIALIZING</div>
+                <button class="icon-btn" id="settings-btn" title="Settings">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                </button>
+            </div>
+        </header>
+
+        <footer class="hud-bottom">
+            <div class="minimal-pill">
+                <span id="hands-meter">0 HANDS</span>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Settings Drawer -->
+    <div class="settings-drawer" id="settings-drawer">
+        <div class="drawer-header">
+            <h3>CORE CONFIG</h3>
+            <button class="close-btn" id="close-settings">✕</button>
+        </div>
+
+        <div class="settings-group">
+            <label>Interface Palette</label>
+            <div class="segmented-group">
+                <button class="segmented-btn active" data-theme="dark">Pure Black</button>
+                <button class="segmented-btn" data-theme="light">Pure White</button>
+            </div>
+        </div>
+
+        <div class="settings-group">
+            <label>Audio Reactivity Mode</label>
+            <div class="segmented-group">
+                <button class="segmented-btn active" data-audio-mode="both">Full Reactivity</button>
+                <button class="segmented-btn" data-audio-mode="off">Static Matrix</button>
+            </div>
+        </div>
+
+        <div class="settings-group">
+            <div class="slider-label-row">
+                <label>Audio Sensitivity</label>
+                <span class="slider-val" id="sens-val">1.5x</span>
+            </div>
+            <input type="range" class="capsule-slider" id="sens-slider" min="0.2" max="3.5" step="0.1" value="1.5">
+        </div>
+
+        <div class="settings-group">
+            <div class="slider-label-row">
+                <label>Rotational Damping</label>
+                <span class="slider-val" id="speed-val">1.0x</span>
+            </div>
+            <input type="range" class="capsule-slider" id="speed-slider" min="0.2" max="2.5" step="0.1" value="1.0">
+        </div>
+    </div>
+
+    <script src="orb.js"></script>
+</body>
+</html>
