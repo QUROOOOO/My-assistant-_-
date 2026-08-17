@@ -90,7 +90,7 @@ body, html {
     pointer-events: auto;
 }
 
-/* Header Live Sensor Icon Button (Matching Rotation Parity with Settings Gear) */
+/* Header Live Sensor Icon Button (Clean Non-Rotating Scale Hover Transition) */
 .header-icon-btn {
     background: var(--hud-bg);
     border: 1px solid var(--border);
@@ -106,16 +106,19 @@ body, html {
 }
 
 .header-icon-btn:hover {
-    transform: rotate(45deg);
-    background: var(--text);
-    color: var(--bg);
-    border-color: var(--text);
+    transform: scale(1.06);
+    background: var(--btn-bg);
+    border-color: rgba(255, 255, 255, 0.25);
 }
 
 .header-icon-btn.active {
     background: var(--text);
     color: var(--bg);
     border-color: var(--text);
+}
+
+[data-theme="light"] .header-icon-btn:hover {
+    border-color: rgba(0, 0, 0, 0.25);
 }
 
 .status-pill {
@@ -202,7 +205,7 @@ body, html {
 
 .sensor-hud-title {
     font-size: 0.72rem;
-    letter-spacing: 2.5px;
+    letter-spacing: 2px;
     font-weight: 700;
     opacity: 0.85;
     color: var(--text);

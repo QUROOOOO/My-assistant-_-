@@ -16,7 +16,7 @@ window.addEventListener('resize', resize);
 resize();
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 1. PRISTINE SPHERE GEOMETRY & 3D BURST KINEMATICS
+// 1. PRISTINE SPHERE GEOMETRY & 360° SUPERNOVA PARTICLES
 // ═══════════════════════════════════════════════════════════════════════════
 const POINT_COUNT = 1400;
 const R0 = 230; // Constant base radius (px)
@@ -42,11 +42,11 @@ for (let i = 0; i < POINT_COUNT; i++) {
         baseR: R0
     });
 
-    // Randomized cosmic explosion vectors (reaching 2.5x - 3.5x viewport scale)
-    const speed = 820 + Math.sin(i * 12.3) * 380;
-    const chaosX = (Math.cos(i * 7.1)) * 0.25;
-    const chaosY = (Math.sin(i * 9.3)) * 0.25;
-    const chaosZ = (Math.cos(i * 11.7)) * 0.25;
+    // 360° Omnidirectional Cosmic Dispersion (Disperses 2.5x - 3.5x viewport scale)
+    const speed = 900 + Math.sin(i * 13.7) * 420;
+    const chaosX = (Math.cos(i * 7.9)) * 0.28;
+    const chaosY = (Math.sin(i * 11.3)) * 0.28;
+    const chaosZ = (Math.cos(i * 14.1)) * 0.28;
     const dir = { x: nx + chaosX, y: ny + chaosY, z: nz + chaosZ };
     const dirLen = Math.sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z) || 1.0;
 
@@ -54,17 +54,31 @@ for (let i = 0; i < POINT_COUNT; i++) {
         vx: (dir.x / dirLen) * speed,
         vy: (dir.y / dirLen) * speed,
         vz: (dir.z / dirLen) * speed,
-        lambda: 0.38 + ((i % 17) / 17.0) * 0.18,
-        seed: i * 37
+        lambda: 0.40, // Exp damping factor: exp(-0.4 * t)
+        seed: i * 41
     });
 }
 
 // Standard ASCII density gradient
 const ASCII_CHARS = ['·', '.', ':', '+', 'x', '*', '%', '0', '#', '@'];
-// High-energy compressed plasma glyphs
+// Dense high-energy plasma glyphs (Fist compression)
 const PLASMA_CHARS = ['@', '#', '%', '&', '8'];
 // Cosmic supernova burst randomized glyphs
-const BURST_CHARS = ['*', '+', 'x', '·', ':', '°', '¤', '#', '░', '▒'];
+const BURST_CHARS = ['*', '+', '·', '%', '0', '@', 'x', '¤'];
+
+// ── Zero-Allocation String Caches for High-Performance 60/120 FPS ────────
+const FONT_CACHE = {};
+for (let sz = 1; sz <= 80; sz++) {
+    FONT_CACHE[sz] = `${sz}px 'Plus Jakarta Sans', -apple-system, sans-serif`;
+}
+
+const DARK_COLOR_CACHE = new Array(101);
+const LIGHT_COLOR_CACHE = new Array(101);
+for (let a = 0; a <= 100; a++) {
+    const alphaStr = (a / 100).toFixed(2);
+    DARK_COLOR_CACHE[a] = `rgba(255, 255, 255, ${alphaStr})`;
+    LIGHT_COLOR_CACHE[a] = `rgba(9, 9, 11, ${alphaStr})`;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 2. ORB STATE & KINEMATICS
@@ -78,21 +92,18 @@ let currentScale = 1.0;
 let targetScale = 1.0;
 
 // Gesture state machine
-let gestureState = 'IDLE'; // IDLE | HOVER | GRAB | DUAL_GRAB | COMPRESS | DUAL_MOLD | SLAP
-let lockedPinchHandId = null;
-let anchorHand = { x: 0, y: 0, depth: 1.0 };
-let anchorOrbPos = { x: width / 2, y: height / 2 };
-let anchorScale = 1.0;
+let gestureState = 'IDLE'; // IDLE | HOVER | DUAL_PINCH_ZOOM | COMPRESS | BLOOM | SLAP
 let anchorDualDist = 0.0;
+let anchorDualScale = 1.0;
 
-// Cosmic Supernova Burst & Reassembly Dynamics
+// Supernova Cosmic Burst & Inertia Reassembly
 let burstActive = false;
 let burstStartTime = 0;
-const BURST_EXPAND_TIME = 1.9; // seconds of full expansion
-const REASSEMBLY_TIME = 1.4;   // seconds of gravitational reassembly
+const BURST_EXPAND_TIME = 1.9; // seconds of full 360° dispersion
+const REASSEMBLY_TIME = 1.3;   // seconds of 3-phase gravitational reassembly
 const TOTAL_BLOOM_TIME = BURST_EXPAND_TIME + REASSEMBLY_TIME;
 
-// Idle-to-Hover deceleration timer
+// Smooth Idle-to-Hover Deceleration Timer
 let handEnterTime = 0;
 let hadHandsLastFrame = false;
 
@@ -103,7 +114,7 @@ let audioMode = 'both';
 let hasHands = false;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 3. AMPLIFIED ACOUSTIC NEAR-FIELD FILTERING (2.8x Boosted Gain)
+// 3. AMPLIFIED ACOUSTIC NEAR-FIELD FILTERING (2.5x Boosted Baseline)
 // ═══════════════════════════════════════════════════════════════════════════
 let audioCtx, analyser, biquadFilter, micSource;
 let audioDataArray;
@@ -132,7 +143,7 @@ function initAudio() {
             micSource.connect(biquadFilter);
             biquadFilter.connect(analyser);
         }).catch(err => {
-            console.warn("Microphone access restricted:", err);
+            console.warn("Microphone access deferred:", err);
         });
     } catch (e) {
         console.warn("Audio initialization deferred");
@@ -159,15 +170,15 @@ function updateAudioEnergy() {
     let gatedEnergy = 0.0;
     const gateThreshold = ambientNoiseFloor * 1.4;
     if (rawEnergy > gateThreshold) {
-        // Boosted baseline sensitivity gain (12.1x total multiplier)
-        gatedEnergy = Math.min((rawEnergy - gateThreshold) * sensitivity * 12.1, 1.0);
+        // Boosted baseline sensitivity gain (12.5x total multiplier)
+        gatedEnergy = Math.min((rawEnergy - gateThreshold) * sensitivity * 12.5, 1.0);
     }
 
     smoothAudio += (gatedEnergy - smoothAudio) * 0.12;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 4. MULTI-HAND CONFLICT ARBITRATION & 5-STATE GESTURE CLIENT
+// 4. REFINED GESTURE ARBITRATION & DUAL PINCH ZOOM
 // ═══════════════════════════════════════════════════════════════════════════
 function connectWS() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -197,114 +208,51 @@ function connectWS() {
                 hadHandsLastFrame = true;
                 hasHands = true;
 
-                const pinchingHands = data.hands.filter(h => h.is_pinching);
-
-                // ── CASE A: DUAL PINCH (Both hands pinching) ────────────────
-                if (data.dual_pinch || pinchingHands.length >= 2) {
-                    lockedPinchHandId = null;
-                    if (gestureState !== 'DUAL_GRAB') {
-                        gestureState = 'DUAL_GRAB';
+                // ── STATE 1: DUAL-HAND PINCH ZOOM & SCALE ───────────────────
+                if (data.dual_pinch) {
+                    if (gestureState !== 'DUAL_PINCH_ZOOM') {
+                        gestureState = 'DUAL_PINCH_ZOOM';
                         anchorDualDist = Math.max(data.two_hand_dist, 0.05);
-                        anchorOrbPos = { ...orbCenter };
-                        anchorScale = currentScale;
+                        anchorDualScale = currentScale;
                     }
                     targetOrbCenter.x = data.dual_pinch_center.x * width;
                     targetOrbCenter.y = data.dual_pinch_center.y * height;
 
-                    const distRatio = data.two_hand_dist / anchorDualDist;
-                    targetScale = Math.min(Math.max(anchorScale * distRatio, 0.35), 2.5);
+                    const scaleRatio = data.two_hand_dist / anchorDualDist;
+                    targetScale = Math.min(Math.max(anchorDualScale * scaleRatio, 0.40), 2.80);
                 }
-                // ── CASE B: PINCH PRIORITY LOCK (Single hand pinching) ──────
-                else if (pinchingHands.length === 1 || lockedPinchHandId !== null) {
-                    let activeGrabHand = null;
-
-                    if (lockedPinchHandId) {
-                        activeGrabHand = data.hands.find(h => h.id === lockedPinchHandId && h.is_pinching);
-                        if (!activeGrabHand) {
-                            lockedPinchHandId = null;
-                        }
-                    }
-
-                    if (!activeGrabHand && pinchingHands.length > 0) {
-                        activeGrabHand = pinchingHands[0];
-                        lockedPinchHandId = activeGrabHand.id;
-                    }
-
-                    if (activeGrabHand) {
-                        if (gestureState !== 'GRAB') {
-                            gestureState = 'GRAB';
-                            anchorHand = {
-                                x: activeGrabHand.palm_x,
-                                y: activeGrabHand.palm_y,
-                                depth: activeGrabHand.depth_scale || 1.0
-                            };
-                            anchorOrbPos = { ...orbCenter };
-                            anchorScale = currentScale;
-                        }
-
-                        const dx = (activeGrabHand.palm_x - anchorHand.x) * width * 1.3;
-                        const dy = (activeGrabHand.palm_y - anchorHand.y) * height * 1.3;
-                        targetOrbCenter.x = anchorOrbPos.x + dx;
-                        targetOrbCenter.y = anchorOrbPos.y + dy;
-
-                        const depthRatio = (activeGrabHand.depth_scale || 1.0) / anchorHand.depth;
-                        targetScale = Math.min(Math.max(anchorScale * depthRatio * 0.85, 0.35), 2.2);
-                    }
-                }
-                // ── CASE C: DUAL-HAND VOLUMETRIC MOLDING (2 open hands) ──────
-                else if (handCount >= 2) {
-                    lockedPinchHandId = null;
-                    gestureState = 'DUAL_MOLD';
-
-                    if (data.two_hand_dist > 0) {
-                        targetScale = THREE_MAP(data.two_hand_dist, 0.12, 0.65, 0.5, 2.5);
-                    }
-                    if (data.dual_angle !== undefined) {
-                        targetRotZ = data.dual_angle * 0.8;
-                    }
-                }
-                // ── CASE D: SINGLE HAND INTERACTIONS ────────────────────────
-                else {
-                    lockedPinchHandId = null;
+                // ── STATE 2: UNSTABLE PLASMA FIST COMPRESSION ───────────────
+                else if (data.compress || data.hands.some(h => h.is_fist)) {
+                    gestureState = 'COMPRESS';
+                    targetScale = 0.58;
                     const primary = data.hands[0];
+                    targetRotY = (primary.palm_x - 0.5) * 1.3;
+                    targetRotX = (primary.palm_y - 0.5) * 1.3;
+                }
+                // ── STATE 3: MAGNETIC HOVER & ORIENTATION ───────────────────
+                else {
+                    gestureState = 'HOVER';
+                    const primary = data.hands[0];
+                    targetScale = primary.depth_scale || 1.0;
 
-                    // State 3: Unstable High-Energy Fist Compress
-                    if (primary.is_fist || data.compress) {
-                        gestureState = 'COMPRESS';
-                        targetScale = 0.62;
-                        targetRotY = (primary.palm_x - 0.5) * 1.4;
-                        targetRotX = (primary.palm_y - 0.5) * 1.4;
+                    if (primary.pitch !== undefined) {
+                        targetRotX = primary.pitch * 1.8;
+                        targetRotY = primary.yaw * 1.8;
+                        targetRotZ = primary.roll * 0.6;
+                    } else {
+                        targetRotY = (primary.palm_x - 0.5) * 2.8;
+                        targetRotX = (primary.palm_y - 0.5) * 2.8;
                     }
-                    // State 1: Magnetic Hover
-                    else if (primary.is_open) {
-                        gestureState = 'HOVER';
-                        targetScale = primary.depth_scale || 1.0;
 
-                        if (primary.pitch !== undefined) {
-                            targetRotX = primary.pitch * 1.8;
-                            targetRotY = primary.yaw * 1.8;
-                            targetRotZ = primary.roll * 0.6;
-                        } else {
-                            targetRotY = (primary.palm_x - 0.5) * 3.0;
-                            targetRotX = (primary.palm_y - 0.5) * 3.0;
-                        }
-
-                        // State 4: Open Palm Slap / Flick
-                        if (data.slap_impulse && data.slap_impulse.active) {
-                            angularVelY += data.slap_impulse.vx * 0.16;
-                            angularVelX += data.slap_impulse.vy * 0.16;
-                        }
-                    }
-                    else {
-                        gestureState = 'HOVER';
-                        targetRotY = (primary.palm_x - 0.5) * 2.5;
-                        targetRotX = (primary.palm_y - 0.5) * 2.5;
+                    // Open Palm Slap / Flick
+                    if (data.slap_impulse && data.slap_impulse.active) {
+                        angularVelY += data.slap_impulse.vx * 0.16;
+                        angularVelX += data.slap_impulse.vy * 0.16;
                     }
                 }
             } else {
                 hadHandsLastFrame = false;
                 hasHands = false;
-                lockedPinchHandId = null;
                 gestureState = 'IDLE';
                 targetScale = 1.0;
                 targetRotZ = 0.0;
@@ -323,10 +271,6 @@ function connectWS() {
 }
 connectWS();
 
-function THREE_MAP(val, inMin, inMax, outMin, outMax) {
-    return outMin + (outMax - outMin) * Math.max(0, Math.min(1, (val - inMin) / (inMax - inMin)));
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
 // 5. UI CONTROLS & FLOATING LIVE FEED HUD
 // ═══════════════════════════════════════════════════════════════════════════
@@ -334,7 +278,7 @@ const settingsDrawer = document.getElementById('settings-drawer');
 document.getElementById('settings-btn').onclick = () => settingsDrawer.classList.add('open');
 document.getElementById('close-settings').onclick = () => settingsDrawer.classList.remove('open');
 
-// Floating In-App Live Feed HUD Picture-in-Picture Toggle
+// Floating In-App Live Feed HUD Toggle
 const cameraToggleBtn = document.getElementById('camera-feed-toggle');
 const sensorHud = document.getElementById('sensor-hud');
 const closeSensorHudBtn = document.getElementById('close-sensor-hud');
@@ -412,12 +356,12 @@ document.getElementById('speed-slider').oninput = (e) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 6. HIGH-PERFORMANCE RENDER LOOP — Cosmic Burst & Plasma Spikes
+// 6. HIGH-PERFORMANCE ZERO-ALLOCATION RENDER LOOP — Supernova & Plasma Spikes
 // ═══════════════════════════════════════════════════════════════════════════
 let time = 0;
 const projectedNodes = new Array(POINT_COUNT);
 for (let i = 0; i < POINT_COUNT; i++) {
-    projectedNodes[i] = { x: 0, y: 0, z: 0, depth: 0, glyph: '·', alpha: 1.0 };
+    projectedNodes[i] = { x: 0, y: 0, z: 0, depth: 0, glyph: '·', alphaIndex: 100 };
 }
 
 function render() {
@@ -428,38 +372,37 @@ function render() {
     updateAudioEnergy();
 
     // Damped position & scale interpolation
-    const isDualMold = gestureState === 'DUAL_MOLD';
-    const springK = isDualMold ? 0.05 : 0.12;
-
+    const springK = gestureState === 'DUAL_PINCH_ZOOM' ? 0.14 : 0.12;
     orbCenter.x += (targetOrbCenter.x - orbCenter.x) * springK;
     orbCenter.y += (targetOrbCenter.y - orbCenter.y) * springK;
     currentScale += (targetScale - currentScale) * springK;
 
     // Smooth Idle-to-Hover Deceleration: omega(t) = omega0 * exp(-t / 0.32)
     if (gestureState === 'IDLE') {
-        targetRotY += 0.002 * speedMult;
+        targetRotY += 0.003 * speedMult; // Continuous slow auto-rotation (0.003 rad/frame)
     } else if (gestureState === 'HOVER') {
         const hoverElapsed = nowSec - handEnterTime;
-        const decayRot = 0.002 * Math.exp(-hoverElapsed / 0.32);
-        targetRotY += decayRot * speedMult;
+        const decayRot = 0.003 * Math.exp(-hoverElapsed / 0.32);
+        if (decayRot > 0.0002) {
+            targetRotY += decayRot * speedMult;
+        }
     }
 
-    // Smooth rotational kinematics
-    const rotLerp = isDualMold ? 0.025 : 0.038;
-    rotX += (targetRotX - rotX) * rotLerp + angularVelX;
-    rotY += (targetRotY - rotY) * rotLerp + angularVelY;
-    rotZ += (targetRotZ - rotZ) * rotLerp + angularVelZ;
+    // Rotational kinematics
+    rotX += (targetRotX - rotX) * 0.038 + angularVelX;
+    rotY += (targetRotY - rotY) * 0.038 + angularVelY;
+    rotZ += (targetRotZ - rotZ) * 0.038 + angularVelZ;
 
     // Viscous friction decay
     angularVelX *= 0.95;
     angularVelY *= 0.95;
     angularVelZ *= 0.95;
 
-    // ── Supernova Cosmic Burst & Gravitational Reassembly Calculation ────
+    // ── 3D Supernova Cosmic Burst & 3-Phase Gravitational Reassembly ────
     let burstTotalElapsed = 0.0;
     let inBurstPhase = false;
     let inReassemblyPhase = false;
-    let reassemblyProgressFactor = 0.0; // 1.0 = peak explosion, 0.0 = equilibrium
+    let reassemblyProgressFactor = 0.0;
 
     if (burstActive) {
         burstTotalElapsed = nowSec - burstStartTime;
@@ -469,18 +412,18 @@ function render() {
             inReassemblyPhase = true;
             const tRe = burstTotalElapsed - BURST_EXPAND_TIME;
 
-            // Phase 1 (0.0s – 0.6s): Slow initial inward drift (breaking momentum)
-            if (tRe < 0.6) {
-                reassemblyProgressFactor = 1.0 - 0.08 * (tRe / 0.6);
+            // Phase 1 (0.0s – 0.5s): Slow initial inward drift (breaking outward momentum)
+            if (tRe < 0.5) {
+                reassemblyProgressFactor = 1.0 - 0.08 * (tRe / 0.5);
             }
-            // Phase 2 (0.6s – 1.1s): Rapid non-linear acceleration toward core (a ~ 1/r^2)
-            else if (tRe < 1.1) {
-                const p = (tRe - 0.6) / 0.5;
+            // Phase 2 (0.5s – 1.0s): Rapid non-linear gravitational acceleration toward core (a ~ 1/r^2)
+            else if (tRe < 1.0) {
+                const p = (tRe - 0.5) / 0.5;
                 reassemblyProgressFactor = 0.92 * (1.0 - Math.pow(p, 2.8));
             }
-            // Phase 3 (1.1s – 1.4s): Elastic damped spring settling into equilibrium
+            // Phase 3 (1.0s – 1.3s): Elastic damped spring relaxation settling cleanly
             else {
-                const p = (tRe - 1.1) / 0.3;
+                const p = (tRe - 1.0) / 0.3;
                 reassemblyProgressFactor = -0.12 * Math.sin(p * Math.PI * 2.5) * Math.exp(-6.0 * p);
             }
         } else {
@@ -497,8 +440,8 @@ function render() {
     const cosZ = Math.cos(rotZ), sinZ = Math.sin(rotZ);
 
     const isCompress = gestureState === 'COMPRESS';
-    const minBound = 0.60 * R0;
-    const maxBound = 1.40 * R0;
+    const minBound = 0.55 * R0;
+    const maxBound = 1.45 * R0;
 
     for (let i = 0; i < POINT_COUNT; i++) {
         const node = nodes[i];
@@ -509,7 +452,7 @@ function render() {
         let glyphChar = '·';
 
         if (inBurstPhase || inReassemblyPhase) {
-            // Cosmic Supernova Burst & Reassembly
+            // 360° Omnidirectional Cosmic Dispersion: P(t) = P0 + V * t * exp(-0.4 * t)
             const tPeak = BURST_EXPAND_TIME;
             const peakDisplacementFactor = tPeak * Math.exp(-bp.lambda * tPeak);
 
@@ -523,9 +466,8 @@ function render() {
                 px = node.nx * R0 + bp.vx * disp;
                 py = node.ny * R0 + bp.vy * disp;
                 pz = node.nz * R0 + bp.vz * disp;
-                nodeAlpha = Math.max(0.2, 1.0 - (tExp / BURST_EXPAND_TIME) * 0.4);
+                nodeAlpha = Math.max(0.18, 1.0 - (tExp / BURST_EXPAND_TIME) * 0.45);
             } else {
-                // Inward gravitational pull with inertia
                 const F = reassemblyProgressFactor;
                 px = (node.nx * R0) + (peakX - node.nx * R0) * F;
                 py = (node.ny * R0) + (peakY - node.ny * R0) * F;
@@ -533,8 +475,8 @@ function render() {
                 nodeAlpha = Math.min(1.0, 0.6 + (1.0 - Math.abs(F)) * 0.4);
             }
 
-            // Dynamic glyph randomization during flight
-            const glyphSeed = Math.floor(bp.seed + time * 15 + i) % BURST_CHARS.length;
+            // Distance-faded glyph scrambling during flight
+            const glyphSeed = Math.floor(bp.seed + time * 18 + i) % BURST_CHARS.length;
             glyphChar = BURST_CHARS[glyphSeed];
         } else {
             // Fluid spherical surface acoustics & micro-ripples
@@ -542,15 +484,16 @@ function render() {
             const voiceWave = smoothAudio * 0.22 * Math.sin(4 * node.theta + 3 * node.phi + 2.5 * time);
             let deltaR = R0 * (idleWave + voiceWave);
 
-            // Unstable high-energy plasma compression with energy spikes
+            // Unstable High-Energy Plasma Fist Compression
             if (isCompress) {
-                // Core contracts to 0.62 * R0 with +/- 3.5px micro-vibrations
-                const microVib = (Math.sin(time * 35 + i * 17) * 3.5);
-                // Procedural radial energy spikes: Delta_r = R0 * 0.35 * max(0, sin(12*theta + 8*phi + 24*t))^3
-                const spikeRaw = Math.sin(12 * node.theta + 8 * node.phi + 24 * time);
-                const spike = R0 * 0.35 * Math.pow(Math.max(0, spikeRaw), 3.0);
+                // Base radius contracts to 0.58 * R0 with +/- 3.5px micro-jitter
+                const microVib = (Math.sin(time * 38 + i * 19) * 3.5);
+                // 14–18 sharp dynamic radial energy spikes protruding outward to 1.35 * R0:
+                // Delta_r_spike = R0 * 0.38 * max(0, sin(14*theta + 10*phi + 28*t))^3
+                const spikeRaw = Math.sin(14 * node.theta + 10 * node.phi + 28 * time);
+                const spike = R0 * 0.38 * Math.pow(Math.max(0, spikeRaw), 3.0);
 
-                deltaR = -R0 * 0.38 + microVib + spike;
+                deltaR = -R0 * 0.42 + microVib + spike;
             }
 
             const clampedR = Math.max(minBound, Math.min(maxBound, R0 + deltaR));
@@ -576,7 +519,6 @@ function render() {
         const screenX = orbCenter.x + x3 * depth;
         const screenY = orbCenter.y + y3 * depth;
 
-        // Select glyph density based on gesture state and depth
         if (!inBurstPhase && !inReassemblyPhase) {
             const normalizedZ = (z2 + (R0 * currentScale)) / (2 * R0 * currentScale + 0.001);
             const clampedZ = Math.max(0, Math.min(1, normalizedZ));
@@ -605,22 +547,21 @@ function render() {
         p.z = z2;
         p.depth = depth;
         p.glyph = glyphChar;
-        p.alpha = nodeAlpha;
+        p.alphaIndex = Math.max(0, Math.min(100, Math.floor(nodeAlpha * 100)));
     }
 
     // Depth Sorting (Back-to-front)
     projectedNodes.sort((a, b) => a.z - b.z);
 
     const isDark = currentTheme === 'dark';
+    const colorCache = isDark ? DARK_COLOR_CACHE : LIGHT_COLOR_CACHE;
 
     for (let i = 0; i < POINT_COUNT; i++) {
         const p = projectedNodes[i];
 
-        const fontSize = Math.max(6, Math.floor(16 * p.depth));
-        ctx.font = `${fontSize}px 'Plus Jakarta Sans', -apple-system, sans-serif`;
-        ctx.fillStyle = isDark
-            ? `rgba(255, 255, 255, ${p.alpha.toFixed(2)})`
-            : `rgba(9, 9, 11, ${p.alpha.toFixed(2)})`;
+        const fontSize = Math.max(6, Math.min(80, Math.floor(16 * p.depth)));
+        ctx.font = FONT_CACHE[fontSize] || FONT_CACHE[16];
+        ctx.fillStyle = colorCache[p.alphaIndex];
 
         ctx.fillText(p.glyph, p.x, p.y);
     }
