@@ -165,8 +165,6 @@ function connectWS() {
 
             if (handCount > 0) {
                 hasHands = true;
-
-                // Find pinching hands
                 const pinchingHands = data.hands.filter(h => h.is_pinching);
 
                 // ── CASE A: DUAL PINCH (Both hands pinching simultaneously) ──
@@ -188,15 +186,13 @@ function connectWS() {
                 else if (pinchingHands.length === 1 || lockedPinchHandId !== null) {
                     let activeGrabHand = null;
 
-                    // If a hand was already locked, check if it's still pinching
                     if (lockedPinchHandId) {
                         activeGrabHand = data.hands.find(h => h.id === lockedPinchHandId && h.is_pinching);
                         if (!activeGrabHand) {
-                            lockedPinchHandId = null; // Hand released pinch
+                            lockedPinchHandId = null;
                         }
                     }
 
-                    // Otherwise lock onto the newly pinching hand
                     if (!activeGrabHand && pinchingHands.length > 0) {
                         activeGrabHand = pinchingHands[0];
                         lockedPinchHandId = activeGrabHand.id;
@@ -229,7 +225,6 @@ function connectWS() {
                     lockedPinchHandId = null;
                     gestureState = 'DUAL_MOLD';
 
-                    // Smooth volumetric scale from 1€ filtered distance
                     if (data.two_hand_dist > 0) {
                         targetScale = THREE_MAP(data.two_hand_dist, 0.12, 0.65, 0.5, 2.5);
                     }
@@ -302,27 +297,44 @@ function THREE_MAP(val, inMin, inMax, outMin, outMax) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 5. UI CONTROLS, SENSOR STREAM TOGGLE & GESTURE ACCORDION
+// 5. UI CONTROLS, FLOATING SENSOR HUD & GESTURE ACCORDION
 // ═══════════════════════════════════════════════════════════════════════════
 const settingsDrawer = document.getElementById('settings-drawer');
 document.getElementById('settings-btn').onclick = () => settingsDrawer.classList.add('open');
 document.getElementById('close-settings').onclick = () => settingsDrawer.classList.remove('open');
 
-// In-Browser Sensor Stream Preview Toggle
-const sensorToggle = document.getElementById('sensor-toggle');
-const sensorPreviewBox = document.getElementById('sensor-preview-box');
-const sensorFeedImg = document.getElementById('sensor-feed-img');
+// Floating In-App Sensor HUD Picture-in-Picture Toggle
+const cameraToggleBtn = document.getElementById('camera-feed-toggle');
+const sensorHud = document.getElementById('sensor-hud');
+const closeSensorHudBtn = document.getElementById('close-sensor-hud');
+const sensorStreamImg = document.getElementById('sensor-stream-img');
 
-if (sensorToggle && sensorPreviewBox && sensorFeedImg) {
-    sensorToggle.addEventListener('change', () => {
-        if (sensorToggle.checked) {
-            sensorPreviewBox.classList.add('active');
-            sensorFeedImg.src = '/video_feed';
+function openSensorHud() {
+    if (!sensorHud) return;
+    sensorHud.classList.remove('hidden');
+    if (cameraToggleBtn) cameraToggleBtn.classList.add('active');
+    if (sensorStreamImg) sensorStreamImg.src = '/video_feed';
+}
+
+function closeSensorHud() {
+    if (!sensorHud) return;
+    sensorHud.classList.add('hidden');
+    if (cameraToggleBtn) cameraToggleBtn.classList.remove('active');
+    if (sensorStreamImg) sensorStreamImg.src = '';
+}
+
+if (cameraToggleBtn) {
+    cameraToggleBtn.addEventListener('click', () => {
+        if (sensorHud && sensorHud.classList.contains('hidden')) {
+            openSensorHud();
         } else {
-            sensorPreviewBox.classList.remove('active');
-            sensorFeedImg.src = '';
+            closeSensorHud();
         }
     });
+}
+
+if (closeSensorHudBtn) {
+    closeSensorHudBtn.addEventListener('click', closeSensorHud);
 }
 
 // Interactive Gesture Manual Accordion Toggle
