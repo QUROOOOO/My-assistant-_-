@@ -12,6 +12,9 @@ import mediapipe as mp
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision
 
+from core.skills.kinematics_validator import OneEuroFilter, KinematicsValidator
+from core.skills.gesture_arbitrator import GestureArbitrator
+
 MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "hand_landmarker.task")
 
@@ -32,64 +35,24 @@ def ensure_model():
 
 
 # ---------------------------------------------------------------------------
-# One Euro (1€) Adaptive Filter
-# ---------------------------------------------------------------------------
-class OneEuroFilter:
-    """Adaptive frequency-domain filter for jitter-free, zero-lag tracking."""
-    def __init__(self, min_cutoff=1.0, beta=0.007, d_cutoff=1.0):
-        self.min_cutoff = float(min_cutoff)
-        self.beta = float(beta)
-        self.d_cutoff = float(d_cutoff)
-        self.x_prev = None
-        self.dx_prev = 0.0
-        self.t_prev = None
-
-    @staticmethod
-    def _smoothing_factor(te, cutoff):
-        r = 2.0 * math.pi * cutoff * te
-        return r / (r + 1.0)
-
-    def __call__(self, x, t=None):
-        x = float(x)
-        if t is None:
-            t = time.time()
-        if self.t_prev is None:
-            self.t_prev = t
-            self.x_prev = x
-            self.dx_prev = 0.0
-            return x
-
-        te = max(t - self.t_prev, 1e-6)
-        self.t_prev = t
-
-        a_d = self._smoothing_factor(te, self.d_cutoff)
-        dx = (x - self.x_prev) / te
-        dx_hat = a_d * dx + (1.0 - a_d) * self.dx_prev
-
-        cutoff = self.min_cutoff + self.beta * abs(dx_hat)
-        a = self._smoothing_factor(te, cutoff)
-        x_hat = a * x + (1.0 - a) * self.x_prev
-
-        self.x_prev = x_hat
-        self.dx_prev = dx_hat
-        return x_hat
-
-
-# ---------------------------------------------------------------------------
 # Per-hand tracked state with Zero-Drift Deadband & Normalized Extension Ratio
 # ---------------------------------------------------------------------------
 class HandState:
-    def __init__(self, raw_cx, raw_cy, raw_depth, raw_pinch, label, is_open, e_hand, now):
+    def __init__(self, raw_cx, raw_cy, raw_depth, raw_pinch, pinch_pos, label, is_open, e_hand, now):
         self.filters = {
-            "x":     OneEuroFilter(min_cutoff=1.5, beta=0.008),
-            "y":     OneEuroFilter(min_cutoff=1.5, beta=0.008),
-            "depth": OneEuroFilter(min_cutoff=1.0, beta=0.005),
-            "pinch": OneEuroFilter(min_cutoff=2.0, beta=0.004),
+            "x":       OneEuroFilter(min_cutoff=1.5, beta=0.008),
+            "y":       OneEuroFilter(min_cutoff=1.5, beta=0.008),
+            "depth":   OneEuroFilter(min_cutoff=1.0, beta=0.005),
+            "pinch":   OneEuroFilter(min_cutoff=2.0, beta=0.004),
+            "pinch_x": OneEuroFilter(min_cutoff=1.5, beta=0.008),
+            "pinch_y": OneEuroFilter(min_cutoff=1.5, beta=0.008),
         }
         self.x = float(self.filters["x"](raw_cx, now))
         self.y = float(self.filters["y"](raw_cy, now))
         self.depth = float(self.filters["depth"](raw_depth, now))
         self.pinch = float(self.filters["pinch"](raw_pinch, now))
+        self.pinch_x = float(self.filters["pinch_x"](pinch_pos[0], now))
+        self.pinch_y = float(self.filters["pinch_y"](pinch_pos[1], now))
 
         self.vx = 0.0
         self.vy = 0.0
@@ -98,15 +61,15 @@ class HandState:
         self.prev_raw_x = float(raw_cx)
         self.prev_raw_y = float(raw_cy)
 
-        self.is_pinching = bool(raw_pinch < 0.22)
+        self.is_pinching = bool(raw_pinch < GestureArbitrator.PINCH_ENTER_RATIO)
         self.label = str(label)
         self.is_open = bool(is_open)
 
         # Normalized Knuckle-to-Fingertip Extension Ratio (E_hand)
         self.e_hand = float(e_hand)
-        self.e_history = collections.deque(maxlen=10) # (time, e_hand) within ~150ms
+        self.e_history = collections.deque(maxlen=10) # (time, e_hand) within ~130ms
         self.e_history.append((now, e_hand))
-        self.is_fist = bool(e_hand < 0.85)
+        self.is_fist = bool(e_hand < GestureArbitrator.FIST_ENTER_THRESHOLD)
         self.bloom_triggered = False
 
         # 3D palm normal Euler angles
@@ -114,15 +77,15 @@ class HandState:
         self.yaw = 0.0
         self.roll = 0.0
 
-    def update(self, raw_cx, raw_cy, raw_depth, raw_pinch, label, is_open, e_hand, dt, now,
+    def update(self, raw_cx, raw_cy, raw_depth, raw_pinch, pinch_pos, label, is_open, e_hand, dt, now,
                pitch=0.0, yaw=0.0, roll=0.0):
-        # ── Zero-Drift Deadband Filtering on Stationary Hands ────────────
+        # ── Zero-Drift Deadband Filtering on Stationary Hands (< 0.035) ──
         raw_vx = (raw_cx - self.prev_raw_x) / max(dt, 0.001)
         raw_vy = (raw_cy - self.prev_raw_y) / max(dt, 0.001)
         raw_speed = math.sqrt(raw_vx**2 + raw_vy**2)
 
-        if raw_speed < 0.025:
-            # Stationary hold: freeze coordinate updates and zero velocity
+        if raw_speed < 0.035:
+            # Stationary hold: freeze coordinate updates to eliminate landmark jitter
             self.vx = 0.0
             self.vy = 0.0
         else:
@@ -140,32 +103,35 @@ class HandState:
 
         self.depth = float(self.filters["depth"](raw_depth, now))
         self.pinch = float(self.filters["pinch"](raw_pinch, now))
+        self.pinch_x = float(self.filters["pinch_x"](pinch_pos[0], now))
+        self.pinch_y = float(self.filters["pinch_y"](pinch_pos[1], now))
 
         # ── Normalized Extension Ratio & Bloom Velocity (120ms window) ──
         self.e_hand = float(e_hand)
         self.e_history.append((now, e_hand))
 
-        # Clean old samples (> 130ms)
         while len(self.e_history) > 1 and (now - self.e_history[0][0]) > 0.130:
             self.e_history.popleft()
 
-        # Compute dE/dt over window
         dE_dt = 0.0
         if len(self.e_history) >= 2:
             dt_window = max(now - self.e_history[0][0], 0.001)
             dE_dt = (self.e_hand - self.e_history[0][1]) / dt_window
 
         was_fist = self.is_fist
-        # Fist State (E_hand < 0.85)
         if self.is_fist:
-            if self.e_hand > 1.05:
+            if self.e_hand > GestureArbitrator.FIST_EXIT_THRESHOLD:
                 self.is_fist = False
         else:
-            if self.e_hand < 0.85:
+            if self.e_hand < GestureArbitrator.FIST_ENTER_THRESHOLD:
                 self.is_fist = True
 
-        # Bloom State (dE/dt > 3.0 s^-1 within 120ms)
-        self.bloom_triggered = bool((was_fist or self.e_hand < 0.95) and (dE_dt > 3.0) and (self.e_hand > 1.15))
+        # Bloom Trigger
+        self.bloom_triggered = bool(
+            (was_fist or self.e_hand < 0.95) and
+            (dE_dt > GestureArbitrator.BLOOM_VELOCITY_THRESHOLD) and
+            (self.e_hand > 1.15)
+        )
 
         self.label = str(label)
         self.is_open = bool(is_open)
@@ -175,10 +141,10 @@ class HandState:
 
         # Scale-invariant pinch hysteresis
         if self.is_pinching:
-            if self.pinch > 0.32:
+            if self.pinch > GestureArbitrator.PINCH_EXIT_RATIO:
                 self.is_pinching = False
         else:
-            if self.pinch < 0.22:
+            if self.pinch < GestureArbitrator.PINCH_ENTER_RATIO:
                 self.is_pinching = True
 
 
@@ -202,7 +168,7 @@ class GestureEngine:
         self.hand_states = {}           # label -> HandState
         self.persistence_counters = {}  # label -> int
 
-        # Dual-hand 1€ filters
+        # Dual-hand 1€ filters for rock-solid pinch zoom
         self.dual_dist_filter = OneEuroFilter(min_cutoff=1.2, beta=0.006)
         self.dual_cx_filter   = OneEuroFilter(min_cutoff=1.5, beta=0.008)
         self.dual_cy_filter   = OneEuroFilter(min_cutoff=1.5, beta=0.008)
@@ -218,7 +184,7 @@ class GestureEngine:
         self.last_frame_time = time.time()
         self.latest_state = {
             "hands": [],
-            "pinch_priority_hand": None,
+            "arbitrated_state": "IDLE",
             "two_hand_dist": 0.0,
             "dual_angle": 0.0,
             "dual_pinch": False,
@@ -287,47 +253,6 @@ class GestureEngine:
         async for chunk in self.generate_mjpeg_stream():
             yield chunk
 
-    @staticmethod
-    def dist(p1, p2):
-        return math.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2 + (p1.z - p2.z)**2)
-
-    @staticmethod
-    def _vec3(p):
-        return (float(p.x), float(p.y), float(p.z))
-
-    @staticmethod
-    def _sub(a, b):
-        return (a[0]-b[0], a[1]-b[1], a[2]-b[2])
-
-    @staticmethod
-    def _cross(a, b):
-        return (
-            a[1]*b[2] - a[2]*b[1],
-            a[2]*b[0] - a[0]*b[2],
-            a[0]*b[1] - a[1]*b[0],
-        )
-
-    @staticmethod
-    def _norm(v):
-        m = math.sqrt(v[0]**2 + v[1]**2 + v[2]**2)
-        return (v[0]/m, v[1]/m, v[2]/m) if m > 1e-9 else (0.0, 0.0, 0.0)
-
-    def _palm_euler(self, lms):
-        wrist = self._vec3(lms[0])
-        middle_mcp = self._vec3(lms[9])
-        index_mcp = self._vec3(lms[5])
-        pinky_mcp = self._vec3(lms[17])
-
-        v1 = self._sub(middle_mcp, wrist)
-        v2 = self._sub(pinky_mcp, index_mcp)
-        normal = self._norm(self._cross(v1, v2))
-
-        nx, ny, nz = normal
-        pitch = math.asin(max(-1.0, min(1.0, -ny)))
-        yaw   = math.atan2(nx, nz)
-        roll  = math.atan2(v2[1], math.sqrt(v2[0]**2 + v2[2]**2))
-        return pitch, yaw, roll
-
     def process_frame(self, frame):
         now = time.time()
         dt = max(now - self.last_frame_time, 0.001)
@@ -371,31 +296,25 @@ class GestureEngine:
                 wrist_pt = (int(lms[0].x * w), int(lms[0].y * h) + 20)
                 cv2.putText(frame, label.upper(), wrist_pt, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
 
-                # ── Normalized Extension Ratio (E_hand) & Pinch ──────────
+                # ── Kinematic metrics via KinematicsValidator ────────────
                 raw_cx = (lms[0].x + lms[9].x) / 2.0
                 raw_cy = (lms[0].y + lms[9].y) / 2.0
 
-                knuckle_ref = self.dist(lms[9], lms[0])
+                knuckle_ref = KinematicsValidator.dist_3d(lms[9], lms[0])
                 raw_depth = knuckle_ref * 3.5
 
-                tip_dist = self.dist(lms[4], lms[8])
-                pinch_ratio = tip_dist / knuckle_ref if knuckle_ref > 1e-6 else 1.0
+                pinch_ratio = KinematicsValidator.calculate_pinch_ratio(lms[4], lms[8], knuckle_ref)
+                pinch_center = ((lms[4].x + lms[8].x) / 2.0, (lms[4].y + lms[8].y) / 2.0)
 
-                # E_hand calculation
-                tips_dist_sum = (
-                    self.dist(lms[8], lms[0]) +
-                    self.dist(lms[12], lms[0]) +
-                    self.dist(lms[16], lms[0]) +
-                    self.dist(lms[20], lms[0])
-                )
-                e_hand = tips_dist_sum / (4.0 * max(knuckle_ref, 1e-6))
+                tips = [lms[8], lms[12], lms[16], lms[20]]
+                e_hand = KinematicsValidator.calculate_extension_ratio(lms[0], lms[9], tips)
                 is_open = e_hand > 1.15
-                pitch, yaw, roll = self._palm_euler(lms)
+                pitch, yaw, roll = KinematicsValidator.calculate_palm_euler(lms[0], lms[9], lms[5], lms[17])
 
                 # ── Handedness-keyed update with deadband filter ─────────
                 if label not in self.hand_states:
                     self.hand_states[label] = HandState(
-                        raw_cx, raw_cy, raw_depth, pinch_ratio,
+                        raw_cx, raw_cy, raw_depth, pinch_ratio, pinch_center,
                         label, is_open, e_hand, now
                     )
                     self.hand_states[label].pitch = pitch
@@ -403,7 +322,7 @@ class GestureEngine:
                     self.hand_states[label].roll = roll
                 else:
                     self.hand_states[label].update(
-                        raw_cx, raw_cy, raw_depth, pinch_ratio,
+                        raw_cx, raw_cy, raw_depth, pinch_ratio, pinch_center,
                         label, is_open, e_hand, dt, now,
                         pitch=pitch, yaw=yaw, roll=roll
                     )
@@ -431,16 +350,15 @@ class GestureEngine:
                     del self.hand_states[label]
                     self.persistence_counters.pop(label, None)
 
-        # ── Multi-Hand Priority Arbitration ──────────────────────────────
-        pinching_hands = [sm for sm in self.hand_states.values() if sm.is_pinching]
-        pinch_priority_hand = pinching_hands[0].label if len(pinching_hands) == 1 else None
-
+        # ── Construct Hands Telemetry Payload ────────────────────────────
         for label, sm in self.hand_states.items():
             hands_data.append({
                 "id": label,
                 "label": sm.label,
                 "palm_x": sm.x,
                 "palm_y": sm.y,
+                "pinch_x": sm.pinch_x,
+                "pinch_y": sm.pinch_y,
                 "depth_scale": min(max(sm.depth, 0.5), 2.2),
                 "pinch_dist": sm.pinch,
                 "is_pinching": sm.is_pinching,
@@ -452,12 +370,30 @@ class GestureEngine:
                 "roll": round(sm.roll, 4),
             })
 
+        # ── Dual-Hand Pinch Zoom & Scale (Keyed by Left & Right Pinches) ─
         two_hand_dist = 0.0
         dual_angle = 0.0
         dual_pinch = False
         dual_pinch_center = {"x": 0.5, "y": 0.5}
 
-        if len(hands_data) == 2:
+        pinching_hands = [h for h in hands_data if h["is_pinching"]]
+        if len(pinching_hands) >= 2:
+            p1, p2 = pinching_hands[0], pinching_hands[1]
+            raw_dx = p2["pinch_x"] - p1["pinch_x"]
+            raw_dy = p2["pinch_y"] - p1["pinch_y"]
+            raw_dist = math.sqrt(raw_dx**2 + raw_dy**2)
+            raw_angle = math.atan2(raw_dy, raw_dx)
+            raw_cx = (p1["pinch_x"] + p2["pinch_x"]) / 2.0
+            raw_cy = (p1["pinch_y"] + p2["pinch_y"]) / 2.0
+
+            two_hand_dist = self.dual_dist_filter(raw_dist, now)
+            dual_angle = self.dual_angle_filter(raw_angle, now)
+            dual_pinch_center = {
+                "x": self.dual_cx_filter(raw_cx, now),
+                "y": self.dual_cy_filter(raw_cy, now)
+            }
+            dual_pinch = True
+        elif len(hands_data) == 2:
             p1, p2 = hands_data[0], hands_data[1]
             raw_dx = p2["palm_x"] - p1["palm_x"]
             raw_dy = p2["palm_y"] - p1["palm_y"]
@@ -473,12 +409,17 @@ class GestureEngine:
                 "y": self.dual_cy_filter(raw_cy, now)
             }
 
-            if p1["is_pinching"] and p2["is_pinching"]:
-                dual_pinch = True
+        arbitrated_state = GestureArbitrator.arbitrate_state(
+            hands=hands_data,
+            dual_pinch=dual_pinch,
+            global_bloom=global_bloom,
+            global_compress=global_compress,
+            slap_active=slap_active
+        )
 
         self.latest_state = {
             "hands": hands_data,
-            "pinch_priority_hand": pinch_priority_hand,
+            "arbitrated_state": arbitrated_state,
             "two_hand_dist": two_hand_dist,
             "dual_angle": round(dual_angle, 4),
             "dual_pinch": dual_pinch,
