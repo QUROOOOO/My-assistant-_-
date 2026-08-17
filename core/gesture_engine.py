@@ -35,10 +35,10 @@ def ensure_model():
 
 
 # ---------------------------------------------------------------------------
-# Per-hand tracked state with Strict 2-Phase Bloom Gating & Zero-Drift Deadband
+# Per-Hand Tracked State with Scale-Invariant Heuristics & 15-Frame Memory
 # ---------------------------------------------------------------------------
 class HandState:
-    def __init__(self, raw_cx, raw_cy, raw_depth, raw_pinch, pinch_pos, label, is_open, e_hand, now):
+    def __init__(self, raw_cx, raw_cy, raw_depth, raw_pinch, pinch_pos, label, is_open, is_fist, now):
         self.filters = {
             "x":       OneEuroFilter(min_cutoff=1.5, beta=0.008),
             "y":       OneEuroFilter(min_cutoff=1.5, beta=0.008),
@@ -64,30 +64,26 @@ class HandState:
         self.is_pinching = bool(raw_pinch < GestureArbitrator.PINCH_ENTER_RATIO)
         self.label = str(label)
         self.is_open = bool(is_open)
+        self.is_fist = bool(is_fist)
 
-        # Strict 2-Phase Fist Charge & Bloom State
-        self.e_hand = float(e_hand)
-        self.e_history = collections.deque(maxlen=12) # (time, e_hand) within ~130ms
-        self.e_history.append((now, e_hand))
-
-        self.fist_charge_counter = 0
-        self.fist_charged = False
-        self.is_fist = False
+        # Bulletproof 15-Frame Memory for Fist-to-Bloom Sequencing
+        self.fist_history = collections.deque(maxlen=GestureArbitrator.FIST_MEMORY_FRAMES)
+        self.fist_history.append(is_fist)
         self.bloom_triggered = False
 
-        # 3D palm normal Euler angles
+        # 3D Palm Normal Euler angles
         self.pitch = 0.0
         self.yaw = 0.0
         self.roll = 0.0
 
-    def update(self, raw_cx, raw_cy, raw_depth, raw_pinch, pinch_pos, label, is_open, e_hand, thumb_tucked, dt, now,
+    def update(self, raw_cx, raw_cy, raw_depth, raw_pinch, pinch_pos, label, is_open, is_fist, dt, now,
                pitch=0.0, yaw=0.0, roll=0.0):
-        # ── Zero-Drift Deadband Filtering on Stationary Hands (< 0.035) ──
+        # ── Zero-Drift Deadband Filtering (< 0.03) ──────────────────────
         raw_vx = (raw_cx - self.prev_raw_x) / max(dt, 0.001)
         raw_vy = (raw_cy - self.prev_raw_y) / max(dt, 0.001)
         raw_speed = math.sqrt(raw_vx**2 + raw_vy**2)
 
-        if raw_speed < 0.035:
+        if raw_speed < GestureArbitrator.VELOCITY_DEADBAND:
             self.vx = 0.0
             self.vy = 0.0
         else:
@@ -108,50 +104,22 @@ class HandState:
         self.pinch_x = float(self.filters["pinch_x"](pinch_pos[0], now))
         self.pinch_y = float(self.filters["pinch_y"](pinch_pos[1], now))
 
-        # ── Strict 2-Phase Bloom Sequence Gating ────────────────────────
-        self.e_hand = float(e_hand)
-        self.e_history.append((now, e_hand))
+        self.is_open = bool(is_open)
+        self.is_fist = bool(is_fist)
+        self.fist_history.append(is_fist)
 
-        while len(self.e_history) > 1 and (now - self.e_history[0][0]) > 0.130:
-            self.e_history.popleft()
-
-        dE_dt = 0.0
-        if len(self.e_history) >= 2:
-            dt_window = max(now - self.e_history[0][0], 0.001)
-            dE_dt = (self.e_hand - self.e_history[0][1]) / dt_window
-
-        # Phase 1: Charge Confirmation (E_hand < 0.72 AND thumb tucked for >= 5 frames)
-        if self.e_hand < GestureArbitrator.FIST_CHARGE_THRESHOLD and thumb_tucked:
-            self.fist_charge_counter += 1
-            if self.fist_charge_counter >= GestureArbitrator.FIST_CHARGE_MIN_FRAMES:
-                self.fist_charged = True
-                self.is_fist = True
-        else:
-            if not self.fist_charged:
-                self.fist_charge_counter = max(0, self.fist_charge_counter - 1)
-                self.is_fist = False
-
-        # Phase 2: Explosive Snap Trigger vs Safe Slow-Open Reversion
+        # ── Bloom Sequence: If open now and recently in fist ────────────
         self.bloom_triggered = False
-        if self.fist_charged:
-            # Explosive Snap Trigger
-            if dE_dt > GestureArbitrator.BLOOM_VELOCITY_THRESHOLD and self.e_hand > 1.15:
-                self.bloom_triggered = True
-                self.fist_charged = False
-                self.fist_charge_counter = 0
-                self.is_fist = False
-            # Safe Slow-Open Reversion
-            elif self.e_hand > GestureArbitrator.FIST_EXIT_THRESHOLD and dE_dt < GestureArbitrator.SLOW_OPEN_VELOCITY_LIMIT:
-                self.fist_charged = False
-                self.fist_charge_counter = 0
-                self.is_fist = False
+        if self.is_open and (True in self.fist_history):
+            self.bloom_triggered = True
+            self.fist_history.clear() # Prevent double-firing
 
         self.label = str(label)
-        self.is_open = bool(is_open)
         self.pitch = float(pitch)
         self.yaw = float(yaw)
         self.roll = float(roll)
 
+        # Scale-Invariant Pinch Hysteresis (0.30 enter, 0.42 exit)
         if self.is_pinching:
             if self.pinch > GestureArbitrator.PINCH_EXIT_RATIO:
                 self.is_pinching = False
@@ -193,17 +161,18 @@ class GestureEngine:
         self._viewer_events = set()
         self._async_loop = None
 
-        # Dedicated Ingestion Thread Buffer (maxlen=1 prevents queue lag)
+        # Dedicated Ingestion Thread Buffer (maxlen=1 prevents queue latency)
         self._frame_buffer = collections.deque(maxlen=1)
 
         self.last_frame_time = time.time()
         self.latest_state = {
             "hands": [],
-            "arbitrated_state": "IDLE",
+            "state": "IDLE",
             "two_hand_dist": 0.0,
             "dual_angle": 0.0,
             "dual_pinch": False,
             "dual_pinch_center": {"x": 0.5, "y": 0.5},
+            "grab_hand": None,
             "bloom": False,
             "compress": False,
             "slap_impulse": {"active": False, "vx": 0.0, "vy": 0.0}
@@ -301,7 +270,7 @@ class GestureEngine:
                 # ── Vectorized NumPy Landmark Array Conversion ───────────
                 pts = np.array([[lm.x, lm.y, lm.z] for lm in lms], dtype=np.float32)
 
-                # ── Render 21-node skeletal mesh on frame ────────────────
+                # ── Render 21-Node Skeletal Mesh on Frame ────────────────
                 pts_2d = (pts[:, :2] * np.array([w, h], dtype=np.float32)).astype(np.int32)
                 for start_idx, end_idx in HAND_CONNECTIONS:
                     cv2.line(frame, tuple(pts_2d[start_idx]), tuple(pts_2d[end_idx]), (255, 255, 0), 2, cv2.LINE_AA)
@@ -312,7 +281,7 @@ class GestureEngine:
                 wrist_pt = (pts_2d[0][0], pts_2d[0][1] + 20)
                 cv2.putText(frame, label.upper(), wrist_pt, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
 
-                # ── SIMD Vectorized Kinematic Metrics ────────────────────
+                # ── Geometric Scale-Invariant Heuristics (L_ref metric) ──
                 wrist = pts[0]
                 middle_mcp = pts[9]
                 index_mcp = pts[5]
@@ -321,26 +290,28 @@ class GestureEngine:
                 raw_cx = float((wrist[0] + middle_mcp[0]) / 2.0)
                 raw_cy = float((wrist[1] + middle_mcp[1]) / 2.0)
 
-                knuckle_ref = float(np.linalg.norm(middle_mcp - wrist))
-                raw_depth = knuckle_ref * 3.5
+                l_ref = float(np.linalg.norm(middle_mcp - wrist))
+                safe_l_ref = max(l_ref, 1e-6)
+                raw_depth = safe_l_ref * 3.5
 
+                # Pinch Ratio: ||Thumb_Tip - Index_Tip|| / L_ref
                 thumb_tip = pts[4]
                 index_tip = pts[8]
                 tip_dist = float(np.linalg.norm(thumb_tip - index_tip))
-                pinch_ratio = tip_dist / knuckle_ref if knuckle_ref > 1e-6 else 1.0
+                pinch_ratio = tip_dist / safe_l_ref
                 pinch_center = (float((thumb_tip[0] + index_tip[0]) / 2.0),
                                 float((thumb_tip[1] + index_tip[1]) / 2.0))
 
-                # Tips: 8 (Index), 12 (Middle), 16 (Ring), 20 (Pinky)
+                # 4 Fingertips: 8 (Index), 12 (Middle), 16 (Ring), 20 (Pinky)
                 four_tips = pts[[8, 12, 16, 20]]
                 dists_to_wrist = np.linalg.norm(four_tips - wrist, axis=1)
-                e_hand = float(np.sum(dists_to_wrist) / (4.0 * max(knuckle_ref, 1e-6)))
+                norm_tip_dists = dists_to_wrist / safe_l_ref
 
-                # Thumb tucked check: distance from thumb tip to wrist vs knuckle ref
-                thumb_wrist_dist = float(np.linalg.norm(thumb_tip - wrist))
-                thumb_tucked = bool(thumb_wrist_dist / max(knuckle_ref, 1e-6) < 0.92)
+                # Fist: >= 3 fingertips < 1.15 * L_ref
+                is_fist = bool(np.sum(norm_tip_dists < GestureArbitrator.FIST_TIP_THRESHOLD) >= 3)
 
-                is_open = e_hand > 1.15
+                # Open: all 4 fingertips > 1.55 * L_ref
+                is_open = bool(np.all(norm_tip_dists > GestureArbitrator.OPEN_TIP_THRESHOLD))
 
                 # 3D Palm Euler Vectorization
                 v1 = middle_mcp - wrist
@@ -353,11 +324,11 @@ class GestureEngine:
                 yaw   = float(math.atan2(normal[0], normal[2]))
                 roll  = float(math.atan2(v2[1], math.sqrt(v2[0]**2 + v2[2]**2)))
 
-                # ── Handedness-keyed update with deadband filter ─────────
+                # ── Handedness-Keyed Update with Deadband ────────────────
                 if label not in self.hand_states:
                     self.hand_states[label] = HandState(
                         raw_cx, raw_cy, raw_depth, pinch_ratio, pinch_center,
-                        label, is_open, e_hand, now
+                        label, is_open, is_fist, now
                     )
                     self.hand_states[label].pitch = pitch
                     self.hand_states[label].yaw = yaw
@@ -365,14 +336,14 @@ class GestureEngine:
                 else:
                     self.hand_states[label].update(
                         raw_cx, raw_cy, raw_depth, pinch_ratio, pinch_center,
-                        label, is_open, e_hand, thumb_tucked, dt, now,
+                        label, is_open, is_fist, dt, now,
                         pitch=pitch, yaw=yaw, roll=roll
                     )
 
                 sm = self.hand_states[label]
                 speed = math.sqrt(sm.vx**2 + sm.vy**2)
 
-                if speed > 1.8 and is_open:
+                if speed > GestureArbitrator.SWIPE_VELOCITY_THRESHOLD and is_open:
                     slap_active = True
                     slap_vx = sm.vx
                     slap_vy = sm.vy
@@ -382,7 +353,7 @@ class GestureEngine:
                 if sm.is_fist:
                     global_compress = True
 
-        # ── Persistence cleanup ──────────────────────────────────────────
+        # ── Persistence Cleanup ──────────────────────────────────────────
         all_tracked = list(self.hand_states.keys())
         for label in all_tracked:
             if label not in detected_labels:
@@ -392,7 +363,7 @@ class GestureEngine:
                     del self.hand_states[label]
                     self.persistence_counters.pop(label, None)
 
-        # ── Construct Hands Telemetry Payload ────────────────────────────
+        # ── Hands Telemetry Payload Construction ─────────────────────────
         for label, sm in self.hand_states.items():
             hands_data.append({
                 "id": label,
@@ -406,18 +377,17 @@ class GestureEngine:
                 "is_pinching": sm.is_pinching,
                 "is_open": sm.is_open,
                 "is_fist": sm.is_fist,
-                "fist_charged": sm.fist_charged,
-                "e_hand": round(sm.e_hand, 3),
                 "pitch": round(sm.pitch, 4),
                 "yaw": round(sm.yaw, 4),
                 "roll": round(sm.roll, 4),
             })
 
-        # ── Dual-Hand Pinch Zoom & Scale ─────────────────────────────────
+        # ── Multi-Hand & Pinch Mode Arbitration ──────────────────────────
         two_hand_dist = 0.0
         dual_angle = 0.0
         dual_pinch = False
         dual_pinch_center = {"x": 0.5, "y": 0.5}
+        grab_hand = None
 
         pinching_hands = [h for h in hands_data if h["is_pinching"]]
         if len(pinching_hands) >= 2:
@@ -436,6 +406,8 @@ class GestureEngine:
                 "y": self.dual_cy_filter(raw_cy, now)
             }
             dual_pinch = True
+        elif len(pinching_hands) == 1:
+            grab_hand = pinching_hands[0]["id"]
         elif len(hands_data) == 2:
             p1, p2 = hands_data[0], hands_data[1]
             raw_dx = p2["palm_x"] - p1["palm_x"]
@@ -452,21 +424,29 @@ class GestureEngine:
                 "y": self.dual_cy_filter(raw_cy, now)
             }
 
-        arbitrated_state = GestureArbitrator.arbitrate_state(
-            hands=hands_data,
-            dual_pinch=dual_pinch,
-            global_bloom=global_bloom,
-            global_compress=global_compress,
-            slap_active=slap_active
-        )
+        # Determine Dominant State
+        state = GestureArbitrator.STATE_IDLE
+        if global_bloom:
+            state = GestureArbitrator.STATE_BLOOM
+        elif dual_pinch:
+            state = GestureArbitrator.STATE_DUAL_PINCH
+        elif grab_hand is not None:
+            state = GestureArbitrator.STATE_GRAB
+        elif global_compress:
+            state = GestureArbitrator.STATE_COMPRESS
+        elif slap_active:
+            state = GestureArbitrator.STATE_SWIPE
+        elif len(hands_data) > 0:
+            state = GestureArbitrator.STATE_HOVER
 
         self.latest_state = {
             "hands": hands_data,
-            "arbitrated_state": arbitrated_state,
+            "state": state,
             "two_hand_dist": two_hand_dist,
             "dual_angle": round(dual_angle, 4),
             "dual_pinch": dual_pinch,
             "dual_pinch_center": dual_pinch_center,
+            "grab_hand": grab_hand,
             "bloom": global_bloom,
             "compress": global_compress,
             "slap_impulse": {"active": slap_active, "vx": slap_vx, "vy": slap_vy}
@@ -499,7 +479,7 @@ class GestureEngine:
         cap = open_camera()
         consecutive_drops = 0
 
-        # Dedicated Background Ingestion Thread
+        # Background Ingestion Worker Thread
         def ingestion_worker():
             nonlocal cap, consecutive_drops
             while self.running:
@@ -526,7 +506,7 @@ class GestureEngine:
         ingestion_thread = threading.Thread(target=ingestion_worker, daemon=True)
         ingestion_thread.start()
 
-        # Processing Loop (reads latest frame from single-slot buffer)
+        # Processing Loop
         while self.running:
             if self._frame_buffer:
                 raw_frame = self._frame_buffer.pop()

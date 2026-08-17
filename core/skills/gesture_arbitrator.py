@@ -1,47 +1,24 @@
 from typing import Dict, Any, List
 
 class GestureArbitrator:
-    """Arbitrates mutual exclusivity between gesture states with strict 2-phase bloom gating."""
+    """Arbitrates mutual exclusivity between gesture states with geometric scale-invariant heuristics."""
 
     STATE_IDLE = "IDLE"
     STATE_HOVER = "HOVER"
-    STATE_DUAL_PINCH_ZOOM = "DUAL_PINCH_ZOOM"
+    STATE_GRAB = "GRAB"
+    STATE_DUAL_PINCH = "DUAL_PINCH"
     STATE_COMPRESS = "COMPRESS"
     STATE_BLOOM = "BLOOM"
-    STATE_SLAP = "SLAP"
+    STATE_SWIPE = "SWIPE"
 
-    # Strict 2-phase Extension ratio thresholds
-    FIST_CHARGE_THRESHOLD = 0.72       # Must be < 0.72 + thumb tucked
-    FIST_CHARGE_MIN_FRAMES = 5         # At least 5 frames (~80ms)
-    FIST_EXIT_THRESHOLD = 1.05
-    BLOOM_VELOCITY_THRESHOLD = 3.8     # dE/dt in s^-1 (explosive snap trigger)
-    SLOW_OPEN_VELOCITY_LIMIT = 2.0     # dE/dt in s^-1 (safe slow open reversion)
+    # Scale-invariant geometric thresholds (normalized by L_ref)
+    PINCH_ENTER_RATIO = 0.30
+    PINCH_EXIT_RATIO = 0.42
 
-    PINCH_ENTER_RATIO = 0.20
-    PINCH_EXIT_RATIO = 0.30
+    FIST_TIP_THRESHOLD = 1.15      # >= 3 fingertips < 1.15 * L_ref
+    OPEN_TIP_THRESHOLD = 1.55      # all 4 fingertips > 1.55 * L_ref
+    FIST_MEMORY_FRAMES = 15        # 15-frame rolling memory (~250ms)
 
-    @staticmethod
-    def arbitrate_state(
-        hands: List[Dict[str, Any]],
-        dual_pinch: bool,
-        global_bloom: bool,
-        global_compress: bool,
-        slap_active: bool
-    ) -> str:
-        """Determines the single authoritative gesture state."""
-        if global_bloom:
-            return GestureArbitrator.STATE_BLOOM
-
-        if dual_pinch:
-            return GestureArbitrator.STATE_DUAL_PINCH_ZOOM
-
-        if global_compress:
-            return GestureArbitrator.STATE_COMPRESS
-
-        if slap_active:
-            return GestureArbitrator.STATE_SLAP
-
-        if len(hands) > 0:
-            return GestureArbitrator.STATE_HOVER
-
-        return GestureArbitrator.STATE_IDLE
+    VELOCITY_DEADBAND = 0.03       # ||V|| < 0.03 -> V = 0
+    SWIPE_VELOCITY_THRESHOLD = 1.6 # ||V|| > 1.6 -> SWIPE
+    HOVER_MAX_VELOCITY = 1.4       # ||V|| < 1.4 -> HOVER
