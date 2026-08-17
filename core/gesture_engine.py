@@ -35,7 +35,7 @@ def ensure_model():
 
 
 # ---------------------------------------------------------------------------
-# Per-Hand Tracked State with Biomechanical Snap & 15-Frame Memory
+# Per-Hand Tracked State with Kinematic Snap Tracker & Confidence Generator
 # ---------------------------------------------------------------------------
 class HandState:
     def __init__(self, raw_cx, raw_cy, raw_depth, raw_pinch, pinch_pos, label, is_open, is_fist, now):
@@ -71,10 +71,12 @@ class HandState:
         self.fist_history.append(is_fist)
         self.bloom_triggered = False
 
-        # Biomechanical Snap Tracking (Thumb Tip vs Middle Tip)
-        self.snap_preload_start = 0.0
-        self.is_snap_preloaded = False
+        # Kinematic Snap Tracker & Confidence Generator
+        self.snap_prime_counter = 0
+        self.visual_snap_primed = False
+        self.snap_prime_time = 0.0
         self.prev_snap_dist = 1.0
+        self.c_vision = 0.0
         self.snap_triggered = False
 
         # 3D Palm Normal Euler angles
@@ -83,7 +85,7 @@ class HandState:
         self.roll = 0.0
 
     def update(self, raw_cx, raw_cy, raw_depth, raw_pinch, pinch_pos, label, is_open, is_fist,
-               norm_thumb_middle_dist, dt, now, pitch=0.0, yaw=0.0, roll=0.0):
+               norm_thumb_middle, dt, now, pitch=0.0, yaw=0.0, roll=0.0):
         # ── Zero-Drift Deadband Filtering (< 0.03) ──────────────────────
         raw_vx = (raw_cx - self.prev_raw_x) / max(dt, 0.001)
         raw_vy = (raw_cy - self.prev_raw_y) / max(dt, 0.001)
@@ -120,23 +122,33 @@ class HandState:
             self.bloom_triggered = True
             self.fist_history.clear()
 
-        # ── Biomechanical Snap Detection (Thumb Tip to Middle Tip) ─────
+        # ── Kinematic Snap Tracker & Confidence Generator ───────────────
         self.snap_triggered = False
-        snap_dD_dt = (norm_thumb_middle_dist - self.prev_snap_dist) / max(dt, 0.001)
-        self.prev_snap_dist = norm_thumb_middle_dist
+        snap_dD_dt = (norm_thumb_middle - self.prev_snap_dist) / max(dt, 0.001)
+        self.prev_snap_dist = norm_thumb_middle
 
-        # Phase 1: Pre-load compression (< 0.20 held for 40ms - 120ms)
-        if norm_thumb_middle_dist < GestureArbitrator.SNAP_PRELOAD_MAX_DIST:
-            if not self.is_snap_preloaded:
-                self.snap_preload_start = now
-                self.is_snap_preloaded = True
+        # Phase 1: Pre-Load Compression (< 0.26 for >= 2 frames)
+        if norm_thumb_middle < 0.26:
+            self.snap_prime_counter += 1
+            if self.snap_prime_counter >= 2:
+                if not self.visual_snap_primed:
+                    self.visual_snap_primed = True
+                    self.snap_prime_time = now
         else:
-            if self.is_snap_preloaded:
-                preload_duration = now - self.snap_preload_start
-                # Phase 2: High-Velocity Slip & Release (dD/dt > 3.6 s^-1 within 40-150ms)
-                if 0.035 <= preload_duration <= 0.250 and snap_dD_dt > GestureArbitrator.SNAP_RELEASE_MIN_VEL:
-                    self.snap_triggered = True
-                self.is_snap_preloaded = False
+            if self.visual_snap_primed:
+                prime_duration = now - self.snap_prime_time
+                # Phase 2: High-Velocity Slip & Release (dD/dt > 2.8 s^-1 within 180ms)
+                if 0.030 <= prime_duration <= 0.220 and snap_dD_dt > 2.8:
+                    # Calculate continuous visual confidence score C_vision
+                    vel_factor = min(1.0, (snap_dD_dt - 2.8) / 1.8)
+                    self.c_vision = min(1.0, 0.50 + vel_factor * 0.50)
+                    if self.c_vision >= 0.82:
+                        self.snap_triggered = True
+                self.visual_snap_primed = False
+                self.snap_prime_counter = 0
+
+        # Continuous decay of visual confidence
+        self.c_vision = max(0.0, self.c_vision - dt * 2.5)
 
         self.label = str(label)
         self.pitch = float(pitch)
@@ -155,6 +167,7 @@ class GestureEngine:
     def __init__(self):
         ensure_model()
         self.connected_clients = set()
+        self.live_feed_clients = set()
 
         base_options = mp_python.BaseOptions(model_asset_path=MODEL_PATH)
         options = vision.HandLandmarkerOptions(
@@ -177,7 +190,7 @@ class GestureEngine:
         self.dual_cy_filter   = OneEuroFilter(min_cutoff=1.5, beta=0.008)
         self.dual_angle_filter = OneEuroFilter(min_cutoff=1.0, beta=0.005)
 
-        # 60 FPS Event-Driven Stream Buffer
+        # 60 FPS MJPEG Stream Buffer
         self.latest_jpeg = None
         self.stream_viewers = 0
         self._jpeg_lock = threading.Lock()
@@ -186,7 +199,7 @@ class GestureEngine:
         # Dedicated Ingestion Thread Buffer (maxlen=1)
         self._frame_buffer = collections.deque(maxlen=1)
 
-        # Global Snap Cooldown Refractory Timer
+        # Global Snap Cooldown Refractory Timer (2.0s)
         self.last_snap_time = 0.0
 
         self.last_frame_time = time.time()
@@ -201,6 +214,7 @@ class GestureEngine:
             "bloom": False,
             "compress": False,
             "snap": False,
+            "c_vision": 0.0,
             "event": None,
             "slap_impulse": {"active": False, "vx": 0.0, "vy": 0.0}
         }
@@ -215,6 +229,16 @@ class GestureEngine:
         finally:
             self.connected_clients.discard(ws)
 
+    async def register_live_feed(self, ws):
+        self.live_feed_clients.add(ws)
+        try:
+            while True:
+                await ws.receive_text()
+        except Exception:
+            pass
+        finally:
+            self.live_feed_clients.discard(ws)
+
     async def broadcast(self):
         if self.connected_clients:
             msg = json.dumps(self.latest_state)
@@ -226,8 +250,18 @@ class GestureEngine:
                     dead.add(client)
             self.connected_clients -= dead
 
+    async def broadcast_live_feed(self, jpeg_bytes):
+        if self.live_feed_clients:
+            dead = set()
+            for ws in list(self.live_feed_clients):
+                try:
+                    await ws.send_bytes(jpeg_bytes)
+                except Exception:
+                    dead.add(ws)
+            self.live_feed_clients -= dead
+
     async def generate_mjpeg_stream(self):
-        """Asynchronous non-blocking 60 FPS MJPEG streaming generator with 16ms cadence."""
+        """Asynchronous non-blocking MJPEG fallback generator."""
         self.stream_viewers += 1
         last_sent = None
         try:
@@ -248,10 +282,6 @@ class GestureEngine:
         finally:
             self.stream_viewers = max(0, self.stream_viewers - 1)
 
-    async def generate_mjpeg(self):
-        async for chunk in self.generate_mjpeg_stream():
-            yield chunk
-
     def process_frame(self, frame):
         now = time.time()
         dt = max(now - self.last_frame_time, 0.001)
@@ -268,6 +298,7 @@ class GestureEngine:
         global_bloom = False
         global_compress = False
         global_snap = False
+        max_c_vision = 0.0
 
         detected_labels = set()
 
@@ -374,8 +405,11 @@ class GestureEngine:
                 if sm.is_fist:
                     global_compress = True
 
-                # Check Snap with Refractory Cooldown (1.5s)
-                if sm.snap_triggered and (now - self.last_snap_time) > GestureArbitrator.SNAP_COOLDOWN_SEC:
+                if sm.c_vision > max_c_vision:
+                    max_c_vision = sm.c_vision
+
+                # Pure High-Confidence Vision Snap (Condition A: >= 0.82 with 2.0s cooldown)
+                if sm.snap_triggered and (now - self.last_snap_time) > 2.0:
                     global_snap = True
                     self.last_snap_time = now
 
@@ -403,6 +437,7 @@ class GestureEngine:
                 "is_pinching": sm.is_pinching,
                 "is_open": sm.is_open,
                 "is_fist": sm.is_fist,
+                "c_vision": round(sm.c_vision, 3),
                 "pitch": round(sm.pitch, 4),
                 "yaw": round(sm.yaw, 4),
                 "roll": round(sm.roll, 4),
@@ -481,16 +516,20 @@ class GestureEngine:
             "bloom": global_bloom,
             "compress": global_compress,
             "snap": global_snap,
+            "c_vision": round(max_c_vision, 3),
             "slap_impulse": {"active": slap_active, "vx": slap_vx, "vy": slap_vy}
         }
 
-        # ── 60 FPS Conditional Live Feed Push (420x236 @ Quality 70) ────
-        if self.stream_viewers > 0:
-            preview = cv2.resize(frame, (420, 236), interpolation=cv2.INTER_LINEAR)
-            ret, jpeg = cv2.imencode('.jpg', preview, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        # ── True 60 FPS Binary WebSocket Frame Push (480x270 @ Quality 60) ──
+        if len(self.live_feed_clients) > 0 or self.stream_viewers > 0:
+            preview = cv2.resize(frame, (480, 270), interpolation=cv2.INTER_LINEAR)
+            ret, jpeg = cv2.imencode('.jpg', preview, [cv2.IMWRITE_JPEG_QUALITY, 60])
             if ret:
+                jpeg_bytes = jpeg.tobytes()
                 with self._jpeg_lock:
-                    self.latest_jpeg = jpeg.tobytes()
+                    self.latest_jpeg = jpeg_bytes
+                if self.live_feed_clients and self._async_loop and not self._async_loop.is_closed():
+                    asyncio.run_coroutine_threadsafe(self.broadcast_live_feed(jpeg_bytes), self._async_loop)
 
         return frame
 

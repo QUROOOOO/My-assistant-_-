@@ -31,6 +31,11 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     await gesture_engine.register(websocket)
 
+@app.websocket("/ws/live_feed")
+async def live_feed_websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    await gesture_engine.register_live_feed(websocket)
+
 @app.get("/video_feed")
 async def video_feed():
     return StreamingResponse(
