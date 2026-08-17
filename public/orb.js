@@ -29,7 +29,7 @@ const nodeNz = new Float32Array(POINT_COUNT);
 const nodeTheta = new Float32Array(POINT_COUNT);
 const nodePhi = new Float32Array(POINT_COUNT);
 
-// Supernova Cosmic Burst Vectors
+// Supernova Cosmic Burst Vectors (360° omnidirectional expansion)
 const burstVx = new Float32Array(POINT_COUNT);
 const burstVy = new Float32Array(POINT_COUNT);
 const burstVz = new Float32Array(POINT_COUNT);
@@ -51,7 +51,7 @@ for (let i = 0; i < POINT_COUNT; i++) {
     nodePhi[i] = phi;
 
     // 360° Omnidirectional Cosmic Dispersion (2.5x - 3.5x viewport scale)
-    const speed = 900.0 + Math.sin(i * 13.7) * 420.0;
+    const speed = 920.0 + Math.sin(i * 13.7) * 440.0;
     const chaosX = Math.cos(i * 7.9) * 0.28;
     const chaosY = Math.sin(i * 11.3) * 0.28;
     const chaosZ = Math.cos(i * 14.1) * 0.28;
@@ -123,14 +123,17 @@ let angularVelX = 0, angularVelY = 0, angularVelZ = 0;
 let currentScale = 1.0;
 let targetScale = 1.0;
 
-let gestureState = 'IDLE'; // IDLE | HOVER | DUAL_PINCH_ZOOM | COMPRESS | BLOOM | SLAP
+let gestureState = 'IDLE'; // IDLE | HOVER | GRAB | DUAL_PINCH | COMPRESS | BLOOM | SWIPE
 let anchorDualDist = 0.0;
 let anchorDualScale = 1.0;
+let anchorGrabHand = { x: 0, y: 0, depth: 1.0 };
+let anchorOrbPos = { x: width / 2, y: height / 2 };
+let anchorGrabScale = 1.0;
 
 // Supernova Cosmic Burst & 3-Phase Gravitational Snap-Back
 let burstActive = false;
 let burstStartTime = 0;
-const BURST_EXPAND_TIME = 1.9; // seconds of full 360° dispersion
+const BURST_EXPAND_TIME = 1.8; // seconds of full 360° dispersion
 const REASSEMBLY_TIME = 1.3;   // seconds of 3-phase gravitational reassembly
 const TOTAL_BLOOM_TIME = BURST_EXPAND_TIME + REASSEMBLY_TIME;
 
@@ -184,7 +187,6 @@ window.addEventListener('click', initAudio, { once: true });
 window.addEventListener('touchstart', initAudio, { once: true });
 
 function updateAudioEnergy() {
-    // Flare energy damping (0.88 snap-back spring decay)
     for (let k = 0; k < FLARE_COUNT; k++) {
         flareEnergies[k] *= 0.88;
     }
@@ -206,12 +208,12 @@ function updateAudioEnergy() {
     let gatedEnergy = 0.0;
     const gateThreshold = ambientNoiseFloor * 1.4;
     if (rawEnergy > gateThreshold) {
+        // Boosted baseline sensitivity (12.5x multiplier)
         gatedEnergy = Math.min((rawEnergy - gateThreshold) * sensitivity * 12.5, 1.0);
 
         // Stochastic Localized Solar Flare Trigger on Transient Audio Peaks
         const deltaRMS = rawEnergy - prevRawAudio;
         if (deltaRMS > 0.025) {
-            // Trigger 1-3 random localized centroids
             const triggerCount = 1 + Math.floor(Math.random() * 3);
             for (let t = 0; t < triggerCount; t++) {
                 const k = Math.floor(Math.random() * FLARE_COUNT);
@@ -225,7 +227,7 @@ function updateAudioEnergy() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 4. REFINED GESTURE ARBITRATION & DUAL PINCH ZOOM
+// 4. REFINED GESTURE ARBITRATION & DUAL/SINGLE PINCH MODES
 // ═══════════════════════════════════════════════════════════════════════════
 function connectWS() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -243,7 +245,7 @@ function connectWS() {
             handsMeter.innerText = `${handCount} HAND${handCount === 1 ? '' : 'S'}`;
 
             // Trigger Supernova Cosmic Particle Burst
-            if (data.bloom) {
+            if (data.bloom || data.state === 'BLOOM') {
                 burstActive = true;
                 burstStartTime = performance.now() / 1000;
             }
@@ -256,9 +258,9 @@ function connectWS() {
                 hasHands = true;
 
                 // ── STATE 1: DUAL-HAND PINCH ZOOM & SCALE ───────────────────
-                if (data.dual_pinch) {
-                    if (gestureState !== 'DUAL_PINCH_ZOOM') {
-                        gestureState = 'DUAL_PINCH_ZOOM';
+                if (data.state === 'DUAL_PINCH' || data.dual_pinch) {
+                    if (gestureState !== 'DUAL_PINCH') {
+                        gestureState = 'DUAL_PINCH';
                         anchorDualDist = Math.max(data.two_hand_dist, 0.05);
                         anchorDualScale = currentScale;
                     }
@@ -268,15 +270,37 @@ function connectWS() {
                     const scaleRatio = data.two_hand_dist / anchorDualDist;
                     targetScale = Math.min(Math.max(anchorDualScale * scaleRatio, 0.40), 2.80);
                 }
-                // ── STATE 2: UNSTABLE PLASMA FIST COMPRESSION (0.42 * R0) ───
-                else if (data.compress || data.hands.some(h => h.is_fist)) {
+                // ── STATE 2: SINGLE-HAND PINCH DRAG (GRAB) ──────────────────
+                else if (data.state === 'GRAB' || data.grab_hand) {
+                    const grabHand = data.hands.find(h => h.id === data.grab_hand) || data.hands[0];
+                    if (gestureState !== 'GRAB') {
+                        gestureState = 'GRAB';
+                        anchorGrabHand = {
+                            x: grabHand.palm_x,
+                            y: grabHand.palm_y,
+                            depth: grabHand.depth_scale || 1.0
+                        };
+                        anchorOrbPos = { ...orbCenter };
+                        anchorGrabScale = currentScale;
+                    }
+
+                    const dx = (grabHand.palm_x - anchorGrabHand.x) * width * 1.3;
+                    const dy = (grabHand.palm_y - anchorGrabHand.y) * height * 1.3;
+                    targetOrbCenter.x = anchorOrbPos.x + dx;
+                    targetOrbCenter.y = anchorOrbPos.y + dy;
+
+                    const depthRatio = (grabHand.depth_scale || 1.0) / anchorGrabHand.depth;
+                    targetScale = Math.min(Math.max(anchorGrabScale * depthRatio * 0.85, 0.35), 2.2);
+                }
+                // ── STATE 3: UNSTABLE PLASMA FIST COMPRESSION (0.42 * R0) ───
+                else if (data.state === 'COMPRESS' || data.compress || data.hands.some(h => h.is_fist)) {
                     gestureState = 'COMPRESS';
                     targetScale = 0.42; // Compressed base equilibrium radius
                     const primary = data.hands[0];
                     targetRotY = (primary.palm_x - 0.5) * 1.3;
                     targetRotX = (primary.palm_y - 0.5) * 1.3;
                 }
-                // ── STATE 3: MAGNETIC HOVER & ORIENTATION ───────────────────
+                // ── STATE 4: MAGNETIC HOVER & ORIENTATION ───────────────────
                 else {
                     gestureState = 'HOVER';
                     const primary = data.hands[0];
@@ -291,7 +315,7 @@ function connectWS() {
                         targetRotX = (primary.palm_y - 0.5) * 2.8;
                     }
 
-                    // Open Palm Slap / Flick
+                    // Open Palm Slap / Swipe Momentum
                     if (data.slap_impulse && data.slap_impulse.active) {
                         angularVelY += data.slap_impulse.vx * 0.16;
                         angularVelX += data.slap_impulse.vy * 0.16;
@@ -413,14 +437,14 @@ function render() {
     updateAudioEnergy();
 
     // Damped position & scale interpolation
-    const springK = gestureState === 'DUAL_PINCH_ZOOM' ? 0.14 : 0.12;
+    const springK = gestureState === 'DUAL_PINCH' ? 0.14 : (gestureState === 'GRAB' ? 0.15 : 0.12);
     orbCenter.x += (targetOrbCenter.x - orbCenter.x) * springK;
     orbCenter.y += (targetOrbCenter.y - orbCenter.y) * springK;
     currentScale += (targetScale - currentScale) * springK;
 
     // Smooth Idle-to-Hover Deceleration: omega(t) = omega0 * exp(-t / 0.32)
     if (gestureState === 'IDLE') {
-        targetRotY += 0.003 * speedMult;
+        targetRotY += 0.003 * speedMult; // Continuous slow auto-rotation (0.003 rad/frame)
     } else if (gestureState === 'HOVER') {
         const hoverElapsed = nowSec - handEnterTime;
         const decayRot = 0.003 * Math.exp(-hoverElapsed / 0.32);
@@ -481,7 +505,7 @@ function render() {
     const isCompress = gestureState === 'COMPRESS';
     const minBound = 0.40 * R0;
     const maxBound = 1.50 * R0;
-    const sigmaSq2 = 2.0 * (0.35 * 0.35); // 2 * sigma^2 for Gaussian solar flare bell curve
+    const sigmaSq2 = 2.0 * (0.35 * 0.35); // 2 * sigma^2 for Gaussian solar flare curve
 
     for (let i = 0; i < POINT_COUNT; i++) {
         const nx = nodeNx[i];
@@ -495,8 +519,9 @@ function render() {
         let glyphChar = '·';
 
         if (inBurstPhase || inReassemblyPhase) {
+            // Trajectory: P(t) = P0 + V * t * exp(-0.35 * t)
             const tPeak = BURST_EXPAND_TIME;
-            const peakDisp = tPeak * Math.exp(-0.40 * tPeak);
+            const peakDisp = tPeak * Math.exp(-0.35 * tPeak);
 
             const peakX = nx * R0 + burstVx[i] * peakDisp;
             const peakY = ny * R0 + burstVy[i] * peakDisp;
@@ -504,7 +529,7 @@ function render() {
 
             if (inBurstPhase) {
                 const tExp = burstTotalElapsed;
-                const disp = tExp * Math.exp(-0.40 * tExp);
+                const disp = tExp * Math.exp(-0.35 * tExp);
                 px = nx * R0 + burstVx[i] * disp;
                 py = ny * R0 + burstVy[i] * disp;
                 pz = nz * R0 + burstVz[i] * disp;
@@ -538,10 +563,7 @@ function render() {
 
             // Unstable High-Energy Plasma Core Fist Compression (0.42 * R0, 45Hz Jitter, Micro-Arcs)
             if (isCompress) {
-                // High-frequency 45Hz chaotic micro-vibration (+/- 2.5px)
                 const microVib = Math.sin(time * 90.0 + i * 23.0) * 2.5;
-
-                // 8–12 Stochastic plasma micro-arcs darting across compressed surface
                 const arc1 = Math.sin(18.0 * theta + 14.0 * phi + 35.0 * time);
                 const arc2 = Math.cos(22.0 * theta - 16.0 * phi + 28.0 * time);
                 const plasmaArc = (Math.max(0.0, arc1) * Math.max(0.0, arc2)) * R0 * 0.32;
@@ -577,13 +599,12 @@ function render() {
             const clampedZ = Math.max(0, Math.min(1, normalizedZ));
 
             if (isCompress) {
-                // Solid high-density glyphs & high opacity (0.95 - 1.0)
                 const plasmaIdx = Math.min(
                     PLASMA_CHARS.length - 1,
                     Math.floor(clampedZ * (PLASMA_CHARS.length - 1))
                 );
                 glyphChar = PLASMA_CHARS[plasmaIdx];
-                nodeAlpha = 0.95 + clampedZ * 0.05;
+                nodeAlpha = 1.0; // Full opacity on compressed plasma core
             } else {
                 const rawGlyphIdx = Math.min(
                     ASCII_CHARS.length - 1,
