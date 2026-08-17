@@ -16,57 +16,89 @@ window.addEventListener('resize', resize);
 resize();
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 1. PRISTINE SPHERE GEOMETRY & 360° SUPERNOVA PARTICLES
+// 1. TYPEDARRAY ZERO-ALLOCATION GEOMETRY & 16 SOLAR FLARE CENTROIDS
 // ═══════════════════════════════════════════════════════════════════════════
 const POINT_COUNT = 1400;
-const R0 = 230; // Constant base radius (px)
-const nodes = [];
-const burstParticles = [];
-const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5)); // ~2.399963 rad
+const R0 = 230.0; // Base equilibrium radius (px)
+const GOLDEN_ANGLE = Math.PI * (3.0 - Math.sqrt(5.0)); // ~2.399963 rad
+
+// Static TypedArray buffers for Fibonacci nodes (Zero GC pressure)
+const nodeNx = new Float32Array(POINT_COUNT);
+const nodeNy = new Float32Array(POINT_COUNT);
+const nodeNz = new Float32Array(POINT_COUNT);
+const nodeTheta = new Float32Array(POINT_COUNT);
+const nodePhi = new Float32Array(POINT_COUNT);
+
+// Supernova Cosmic Burst Vectors
+const burstVx = new Float32Array(POINT_COUNT);
+const burstVy = new Float32Array(POINT_COUNT);
+const burstVz = new Float32Array(POINT_COUNT);
+const burstSeed = new Uint16Array(POINT_COUNT);
 
 for (let i = 0; i < POINT_COUNT; i++) {
-    const y = 1 - (i / (POINT_COUNT - 1)) * 2;
-    const phi = Math.acos(Math.max(-1, Math.min(1, y)));
+    const y = 1.0 - (i / (POINT_COUNT - 1.0)) * 2.0;
+    const phi = Math.acos(Math.max(-1.0, Math.min(1.0, y)));
     const theta = GOLDEN_ANGLE * i;
 
     const nx = Math.sin(phi) * Math.cos(theta);
     const ny = Math.cos(phi);
     const nz = Math.sin(phi) * Math.sin(theta);
 
-    nodes.push({
-        theta: theta,
-        phi: phi,
-        nx: nx,
-        ny: ny,
-        nz: nz,
-        baseR: R0
-    });
+    nodeNx[i] = nx;
+    nodeNy[i] = ny;
+    nodeNz[i] = nz;
+    nodeTheta[i] = theta;
+    nodePhi[i] = phi;
 
-    // 360° Omnidirectional Cosmic Dispersion (Disperses 2.5x - 3.5x viewport scale)
-    const speed = 900 + Math.sin(i * 13.7) * 420;
-    const chaosX = (Math.cos(i * 7.9)) * 0.28;
-    const chaosY = (Math.sin(i * 11.3)) * 0.28;
-    const chaosZ = (Math.cos(i * 14.1)) * 0.28;
-    const dir = { x: nx + chaosX, y: ny + chaosY, z: nz + chaosZ };
-    const dirLen = Math.sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z) || 1.0;
+    // 360° Omnidirectional Cosmic Dispersion (2.5x - 3.5x viewport scale)
+    const speed = 900.0 + Math.sin(i * 13.7) * 420.0;
+    const chaosX = Math.cos(i * 7.9) * 0.28;
+    const chaosY = Math.sin(i * 11.3) * 0.28;
+    const chaosZ = Math.cos(i * 14.1) * 0.28;
+    const dirX = nx + chaosX;
+    const dirY = ny + chaosY;
+    const dirZ = nz + chaosZ;
+    const dirLen = Math.sqrt(dirX * dirX + dirY * dirY + dirZ * dirZ) || 1.0;
 
-    burstParticles.push({
-        vx: (dir.x / dirLen) * speed,
-        vy: (dir.y / dirLen) * speed,
-        vz: (dir.z / dirLen) * speed,
-        lambda: 0.40, // Exp damping factor: exp(-0.4 * t)
-        seed: i * 41
-    });
+    burstVx[i] = (dirX / dirLen) * speed;
+    burstVy[i] = (dirY / dirLen) * speed;
+    burstVz[i] = (dirZ / dirLen) * speed;
+    burstSeed[i] = (i * 41) % 1000;
 }
 
-// Standard ASCII density gradient
+// 16 Localized Solar Flare Centroid Unit Vectors (Fibonacci distributed)
+const FLARE_COUNT = 16;
+const flareAx = new Float32Array(FLARE_COUNT);
+const flareAy = new Float32Array(FLARE_COUNT);
+const flareAz = new Float32Array(FLARE_COUNT);
+const flareEnergies = new Float32Array(FLARE_COUNT);
+
+for (let k = 0; k < FLARE_COUNT; k++) {
+    const y = 1.0 - (k / (FLARE_COUNT - 1.0)) * 2.0;
+    const phi = Math.acos(Math.max(-1.0, Math.min(1.0, y)));
+    const theta = GOLDEN_ANGLE * k * 3.5;
+    flareAx[k] = Math.sin(phi) * Math.cos(theta);
+    flareAy[k] = Math.cos(phi);
+    flareAz[k] = Math.sin(phi) * Math.sin(theta);
+    flareEnergies[k] = 0.0;
+}
+
+// Projection & Render Buffers
+const projX = new Float32Array(POINT_COUNT);
+const projY = new Float32Array(POINT_COUNT);
+const projZ = new Float32Array(POINT_COUNT);
+const projDepth = new Float32Array(POINT_COUNT);
+const projAlphaIdx = new Uint8Array(POINT_COUNT);
+const projGlyph = new Array(POINT_COUNT);
+const renderOrder = new Uint16Array(POINT_COUNT);
+for (let i = 0; i < POINT_COUNT; i++) renderOrder[i] = i;
+
+// Density Gradients
 const ASCII_CHARS = ['·', '.', ':', '+', 'x', '*', '%', '0', '#', '@'];
-// Dense high-energy plasma glyphs (Fist compression)
-const PLASMA_CHARS = ['@', '#', '%', '&', '8'];
-// Cosmic supernova burst randomized glyphs
+const PLASMA_CHARS = ['@', '#', '8', '%', '0'];
 const BURST_CHARS = ['*', '+', '·', '%', '0', '@', 'x', '¤'];
 
-// ── Zero-Allocation String Caches for High-Performance 60/120 FPS ────────
+// Zero-Allocation String Caches
 const FONT_CACHE = {};
 for (let sz = 1; sz <= 80; sz++) {
     FONT_CACHE[sz] = `${sz}px 'Plus Jakarta Sans', -apple-system, sans-serif`;
@@ -91,12 +123,11 @@ let angularVelX = 0, angularVelY = 0, angularVelZ = 0;
 let currentScale = 1.0;
 let targetScale = 1.0;
 
-// Gesture state machine
 let gestureState = 'IDLE'; // IDLE | HOVER | DUAL_PINCH_ZOOM | COMPRESS | BLOOM | SLAP
 let anchorDualDist = 0.0;
 let anchorDualScale = 1.0;
 
-// Supernova Cosmic Burst & Inertia Reassembly
+// Supernova Cosmic Burst & 3-Phase Gravitational Snap-Back
 let burstActive = false;
 let burstStartTime = 0;
 const BURST_EXPAND_TIME = 1.9; // seconds of full 360° dispersion
@@ -114,11 +145,12 @@ let audioMode = 'both';
 let hasHands = false;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 3. AMPLIFIED ACOUSTIC NEAR-FIELD FILTERING (2.5x Boosted Baseline)
+// 3. AMPLIFIED ACOUSTIC FILTERING & STOCHASTIC SOLAR FLARE ENGINE
 // ═══════════════════════════════════════════════════════════════════════════
 let audioCtx, analyser, biquadFilter, micSource;
 let audioDataArray;
 let smoothAudio = 0.0;
+let prevRawAudio = 0.0;
 let ambientNoiseFloor = 0.012;
 
 function initAudio() {
@@ -127,7 +159,6 @@ function initAudio() {
         const AC = window.AudioContext || window.webkitAudioContext;
         audioCtx = new AC();
 
-        // Extended vocal bandpass (180Hz – 4200Hz, Q = 0.65)
         biquadFilter = audioCtx.createBiquadFilter();
         biquadFilter.type = 'bandpass';
         biquadFilter.frequency.value = 2190;
@@ -153,6 +184,11 @@ window.addEventListener('click', initAudio, { once: true });
 window.addEventListener('touchstart', initAudio, { once: true });
 
 function updateAudioEnergy() {
+    // Flare energy damping (0.88 snap-back spring decay)
+    for (let k = 0; k < FLARE_COUNT; k++) {
+        flareEnergies[k] *= 0.88;
+    }
+
     if (audioMode === 'off' || !analyser || !audioDataArray) {
         smoothAudio += (0.0 - smoothAudio) * 0.10;
         return;
@@ -170,11 +206,22 @@ function updateAudioEnergy() {
     let gatedEnergy = 0.0;
     const gateThreshold = ambientNoiseFloor * 1.4;
     if (rawEnergy > gateThreshold) {
-        // Boosted baseline sensitivity gain (12.5x total multiplier)
         gatedEnergy = Math.min((rawEnergy - gateThreshold) * sensitivity * 12.5, 1.0);
-    }
 
-    smoothAudio += (gatedEnergy - smoothAudio) * 0.12;
+        // Stochastic Localized Solar Flare Trigger on Transient Audio Peaks
+        const deltaRMS = rawEnergy - prevRawAudio;
+        if (deltaRMS > 0.025) {
+            // Trigger 1-3 random localized centroids
+            const triggerCount = 1 + Math.floor(Math.random() * 3);
+            for (let t = 0; t < triggerCount; t++) {
+                const k = Math.floor(Math.random() * FLARE_COUNT);
+                const peakMultiplier = 0.4 + Math.random() * 0.8;
+                flareEnergies[k] = Math.min(1.4, flareEnergies[k] + gatedEnergy * peakMultiplier * 1.8);
+            }
+        }
+    }
+    prevRawAudio = rawEnergy;
+    smoothAudio += (gatedEnergy - smoothAudio) * 0.14;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -221,10 +268,10 @@ function connectWS() {
                     const scaleRatio = data.two_hand_dist / anchorDualDist;
                     targetScale = Math.min(Math.max(anchorDualScale * scaleRatio, 0.40), 2.80);
                 }
-                // ── STATE 2: UNSTABLE PLASMA FIST COMPRESSION ───────────────
+                // ── STATE 2: UNSTABLE PLASMA FIST COMPRESSION (0.42 * R0) ───
                 else if (data.compress || data.hands.some(h => h.is_fist)) {
                     gestureState = 'COMPRESS';
-                    targetScale = 0.58;
+                    targetScale = 0.42; // Compressed base equilibrium radius
                     const primary = data.hands[0];
                     targetRotY = (primary.palm_x - 0.5) * 1.3;
                     targetRotX = (primary.palm_y - 0.5) * 1.3;
@@ -278,7 +325,6 @@ const settingsDrawer = document.getElementById('settings-drawer');
 document.getElementById('settings-btn').onclick = () => settingsDrawer.classList.add('open');
 document.getElementById('close-settings').onclick = () => settingsDrawer.classList.remove('open');
 
-// Floating In-App Live Feed HUD Toggle
 const cameraToggleBtn = document.getElementById('camera-feed-toggle');
 const sensorHud = document.getElementById('sensor-hud');
 const closeSensorHudBtn = document.getElementById('close-sensor-hud');
@@ -327,7 +373,6 @@ if (closeSensorHudBtn) {
     closeSensorHudBtn.addEventListener('click', closeSensorHud);
 }
 
-// Theme and audio mode segmented toggles
 document.querySelectorAll('.segmented-group').forEach(group => {
     const buttons = group.querySelectorAll('.segmented-btn');
     buttons.forEach(btn => {
@@ -356,13 +401,9 @@ document.getElementById('speed-slider').oninput = (e) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 6. HIGH-PERFORMANCE ZERO-ALLOCATION RENDER LOOP — Supernova & Plasma Spikes
+// 6. HIGH-PERFORMANCE RENDER LOOP — Batched Glyph Drawing & Solar Flares
 // ═══════════════════════════════════════════════════════════════════════════
 let time = 0;
-const projectedNodes = new Array(POINT_COUNT);
-for (let i = 0; i < POINT_COUNT; i++) {
-    projectedNodes[i] = { x: 0, y: 0, z: 0, depth: 0, glyph: '·', alphaIndex: 100 };
-}
 
 function render() {
     requestAnimationFrame(render);
@@ -379,7 +420,7 @@ function render() {
 
     // Smooth Idle-to-Hover Deceleration: omega(t) = omega0 * exp(-t / 0.32)
     if (gestureState === 'IDLE') {
-        targetRotY += 0.003 * speedMult; // Continuous slow auto-rotation (0.003 rad/frame)
+        targetRotY += 0.003 * speedMult;
     } else if (gestureState === 'HOVER') {
         const hoverElapsed = nowSec - handEnterTime;
         const decayRot = 0.003 * Math.exp(-hoverElapsed / 0.32);
@@ -388,12 +429,10 @@ function render() {
         }
     }
 
-    // Rotational kinematics
     rotX += (targetRotX - rotX) * 0.038 + angularVelX;
     rotY += (targetRotY - rotY) * 0.038 + angularVelY;
     rotZ += (targetRotZ - rotZ) * 0.038 + angularVelZ;
 
-    // Viscous friction decay
     angularVelX *= 0.95;
     angularVelY *= 0.95;
     angularVelZ *= 0.95;
@@ -421,7 +460,7 @@ function render() {
                 const p = (tRe - 0.5) / 0.5;
                 reassemblyProgressFactor = 0.92 * (1.0 - Math.pow(p, 2.8));
             }
-            // Phase 3 (1.0s – 1.3s): Elastic damped spring relaxation settling cleanly
+            // Phase 3 (1.0s – 1.3s): Elastic damped spring relaxation settling cleanly into R0
             else {
                 const p = (tRe - 1.0) / 0.3;
                 reassemblyProgressFactor = -0.12 * Math.sin(p * Math.PI * 2.5) * Math.exp(-6.0 * p);
@@ -440,68 +479,82 @@ function render() {
     const cosZ = Math.cos(rotZ), sinZ = Math.sin(rotZ);
 
     const isCompress = gestureState === 'COMPRESS';
-    const minBound = 0.55 * R0;
-    const maxBound = 1.45 * R0;
+    const minBound = 0.40 * R0;
+    const maxBound = 1.50 * R0;
+    const sigmaSq2 = 2.0 * (0.35 * 0.35); // 2 * sigma^2 for Gaussian solar flare bell curve
 
     for (let i = 0; i < POINT_COUNT; i++) {
-        const node = nodes[i];
-        const bp = burstParticles[i];
+        const nx = nodeNx[i];
+        const ny = nodeNy[i];
+        const nz = nodeNz[i];
+        const theta = nodeTheta[i];
+        const phi = nodePhi[i];
 
         let px, py, pz;
         let nodeAlpha = 1.0;
         let glyphChar = '·';
 
         if (inBurstPhase || inReassemblyPhase) {
-            // 360° Omnidirectional Cosmic Dispersion: P(t) = P0 + V * t * exp(-0.4 * t)
             const tPeak = BURST_EXPAND_TIME;
-            const peakDisplacementFactor = tPeak * Math.exp(-bp.lambda * tPeak);
+            const peakDisp = tPeak * Math.exp(-0.40 * tPeak);
 
-            const peakX = node.nx * R0 + bp.vx * peakDisplacementFactor;
-            const peakY = node.ny * R0 + bp.vy * peakDisplacementFactor;
-            const peakZ = node.nz * R0 + bp.vz * peakDisplacementFactor;
+            const peakX = nx * R0 + burstVx[i] * peakDisp;
+            const peakY = ny * R0 + burstVy[i] * peakDisp;
+            const peakZ = nz * R0 + burstVz[i] * peakDisp;
 
             if (inBurstPhase) {
                 const tExp = burstTotalElapsed;
-                const disp = tExp * Math.exp(-bp.lambda * tExp);
-                px = node.nx * R0 + bp.vx * disp;
-                py = node.ny * R0 + bp.vy * disp;
-                pz = node.nz * R0 + bp.vz * disp;
+                const disp = tExp * Math.exp(-0.40 * tExp);
+                px = nx * R0 + burstVx[i] * disp;
+                py = ny * R0 + burstVy[i] * disp;
+                pz = nz * R0 + burstVz[i] * disp;
                 nodeAlpha = Math.max(0.18, 1.0 - (tExp / BURST_EXPAND_TIME) * 0.45);
             } else {
                 const F = reassemblyProgressFactor;
-                px = (node.nx * R0) + (peakX - node.nx * R0) * F;
-                py = (node.ny * R0) + (peakY - node.ny * R0) * F;
-                pz = (node.nz * R0) + (peakZ - node.nz * R0) * F;
+                px = (nx * R0) + (peakX - nx * R0) * F;
+                py = (ny * R0) + (peakY - ny * R0) * F;
+                pz = (nz * R0) + (peakZ - nz * R0) * F;
                 nodeAlpha = Math.min(1.0, 0.6 + (1.0 - Math.abs(F)) * 0.4);
             }
 
-            // Distance-faded glyph scrambling during flight
-            const glyphSeed = Math.floor(bp.seed + time * 18 + i) % BURST_CHARS.length;
+            const glyphSeed = Math.floor(burstSeed[i] + time * 18 + i) % BURST_CHARS.length;
             glyphChar = BURST_CHARS[glyphSeed];
         } else {
-            // Fluid spherical surface acoustics & micro-ripples
-            const idleWave = 0.012 * Math.sin(2 * node.theta + 3 * node.phi + time);
-            const voiceWave = smoothAudio * 0.22 * Math.sin(4 * node.theta + 3 * node.phi + 2.5 * time);
-            let deltaR = R0 * (idleWave + voiceWave);
+            // Idle organic surface breathing
+            const idleWave = 0.010 * Math.sin(2.0 * theta + 3.0 * phi + time);
 
-            // Unstable High-Energy Plasma Fist Compression
+            // Stochastic Localized Solar Flare Summation across 16 Centroids
+            let flareSum = 0.0;
+            for (let k = 0; k < FLARE_COUNT; k++) {
+                if (flareEnergies[k] > 0.005) {
+                    const dx = nx - flareAx[k];
+                    const dy = ny - flareAy[k];
+                    const dz = nz - flareAz[k];
+                    const distSq = dx * dx + dy * dy + dz * dz;
+                    flareSum += flareEnergies[k] * Math.exp(-distSq / sigmaSq2);
+                }
+            }
+            let deltaR = R0 * (idleWave + flareSum * 0.35);
+
+            // Unstable High-Energy Plasma Core Fist Compression (0.42 * R0, 45Hz Jitter, Micro-Arcs)
             if (isCompress) {
-                // Base radius contracts to 0.58 * R0 with +/- 3.5px micro-jitter
-                const microVib = (Math.sin(time * 38 + i * 19) * 3.5);
-                // 14–18 sharp dynamic radial energy spikes protruding outward to 1.35 * R0:
-                // Delta_r_spike = R0 * 0.38 * max(0, sin(14*theta + 10*phi + 28*t))^3
-                const spikeRaw = Math.sin(14 * node.theta + 10 * node.phi + 28 * time);
-                const spike = R0 * 0.38 * Math.pow(Math.max(0, spikeRaw), 3.0);
+                // High-frequency 45Hz chaotic micro-vibration (+/- 2.5px)
+                const microVib = Math.sin(time * 90.0 + i * 23.0) * 2.5;
 
-                deltaR = -R0 * 0.42 + microVib + spike;
+                // 8–12 Stochastic plasma micro-arcs darting across compressed surface
+                const arc1 = Math.sin(18.0 * theta + 14.0 * phi + 35.0 * time);
+                const arc2 = Math.cos(22.0 * theta - 16.0 * phi + 28.0 * time);
+                const plasmaArc = (Math.max(0.0, arc1) * Math.max(0.0, arc2)) * R0 * 0.32;
+
+                deltaR = -R0 * 0.58 + microVib + plasmaArc;
             }
 
             const clampedR = Math.max(minBound, Math.min(maxBound, R0 + deltaR));
             const effectiveR = clampedR * currentScale;
 
-            px = node.nx * effectiveR;
-            py = node.ny * effectiveR;
-            pz = node.nz * effectiveR;
+            px = nx * effectiveR;
+            py = ny * effectiveR;
+            pz = nz * effectiveR;
         }
 
         // 3D Euler Rotations (Y -> X -> Z)
@@ -524,46 +577,46 @@ function render() {
             const clampedZ = Math.max(0, Math.min(1, normalizedZ));
 
             if (isCompress) {
+                // Solid high-density glyphs & high opacity (0.95 - 1.0)
                 const plasmaIdx = Math.min(
                     PLASMA_CHARS.length - 1,
                     Math.floor(clampedZ * (PLASMA_CHARS.length - 1))
                 );
                 glyphChar = PLASMA_CHARS[plasmaIdx];
+                nodeAlpha = 0.95 + clampedZ * 0.05;
             } else {
                 const rawGlyphIdx = Math.min(
                     ASCII_CHARS.length - 1,
                     Math.floor(clampedZ * (ASCII_CHARS.length - 1))
                 );
                 glyphChar = ASCII_CHARS[rawGlyphIdx];
+                nodeAlpha = Math.min(Math.max(0.14 + clampedZ * 0.86, 0.14), 1.0);
             }
-
-            const normalizedDepth = (z2 + (R0 * currentScale)) / (2 * R0 * currentScale + 0.001);
-            nodeAlpha = Math.min(Math.max(0.14 + normalizedDepth * 0.86, 0.14), 1.0);
         }
 
-        const p = projectedNodes[i];
-        p.x = screenX;
-        p.y = screenY;
-        p.z = z2;
-        p.depth = depth;
-        p.glyph = glyphChar;
-        p.alphaIndex = Math.max(0, Math.min(100, Math.floor(nodeAlpha * 100)));
+        projX[i] = screenX;
+        projY[i] = screenY;
+        projZ[i] = z2;
+        projDepth[i] = depth;
+        projGlyph[i] = glyphChar;
+        projAlphaIdx[i] = Math.max(0, Math.min(100, Math.floor(nodeAlpha * 100)));
     }
 
-    // Depth Sorting (Back-to-front)
-    projectedNodes.sort((a, b) => a.z - b.z);
+    // Depth Sorting (Back-to-front index array sort)
+    renderOrder.sort((a, b) => projZ[a] - projZ[b]);
 
     const isDark = currentTheme === 'dark';
     const colorCache = isDark ? DARK_COLOR_CACHE : LIGHT_COLOR_CACHE;
 
-    for (let i = 0; i < POINT_COUNT; i++) {
-        const p = projectedNodes[i];
+    // Batched Glyph Rendering
+    for (let j = 0; j < POINT_COUNT; j++) {
+        const i = renderOrder[j];
 
-        const fontSize = Math.max(6, Math.min(80, Math.floor(16 * p.depth)));
+        const fontSize = Math.max(6, Math.min(80, Math.floor(16 * projDepth[i])));
         ctx.font = FONT_CACHE[fontSize] || FONT_CACHE[16];
-        ctx.fillStyle = colorCache[p.alphaIndex];
+        ctx.fillStyle = colorCache[projAlphaIdx[i]];
 
-        ctx.fillText(p.glyph, p.x, p.y);
+        ctx.fillText(projGlyph[i], projX[i], projY[i]);
     }
 }
 render();
