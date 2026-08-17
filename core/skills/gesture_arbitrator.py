@@ -1,7 +1,7 @@
 from typing import Dict, Any, List
 
 class GestureArbitrator:
-    """Arbitrates mutual exclusivity between gesture states with geometric scale-invariant heuristics."""
+    """Arbitrates mutual exclusivity between gesture states with state-latched hysteresis heuristics."""
 
     STATE_IDLE = "IDLE"
     STATE_HOVER = "HOVER"
@@ -16,13 +16,16 @@ class GestureArbitrator:
     PINCH_ENTER_RATIO = 0.30
     PINCH_EXIT_RATIO = 0.42
 
-    SNAP_PRELOAD_MAX_DIST = 0.20   # Normalized distance thumb tip to middle tip
-    SNAP_RELEASE_MIN_VEL = 3.6     # dD/dt in s^-1
-    SNAP_COOLDOWN_SEC = 1.5        # Refractory period
+    # Fist Hysteresis Latch
+    FIST_ENTER_THRESHOLD = 1.10    # >= 3 fingertips < 1.10 * L_ref
+    FIST_EXIT_THRESHOLD = 1.45     # all 4 fingertips > 1.45 * L_ref
+    BLOOM_SNAP_VELOCITY = 2.2      # dE/dt > 2.2 s^-1 within 150ms -> BLOOM
 
-    FIST_TIP_THRESHOLD = 1.15      # >= 3 fingertips < 1.15 * L_ref
-    OPEN_TIP_THRESHOLD = 1.55      # all 4 fingertips > 1.55 * L_ref
-    FIST_MEMORY_FRAMES = 15        # 15-frame rolling memory (~250ms)
+    # Biomechanical Snap Tracking
+    SNAP_PRIMED_MAX_DIST = 0.28    # Thumb & Middle tip distance < 0.28 * L_ref
+    SNAP_DOWNWARD_DELTA_Y = 0.08   # Delta Y slip > 0.08 within 160ms
+    SNAP_VISION_CONF_THRESHOLD = 0.62
+    SNAP_COOLDOWN_SEC = 2.0        # Refractory period
 
     VELOCITY_DEADBAND = 0.03       # ||V|| < 0.03 -> V = 0
     SWIPE_VELOCITY_THRESHOLD = 1.6 # ||V|| > 1.6 -> SWIPE
