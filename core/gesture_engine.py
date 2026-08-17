@@ -2,9 +2,11 @@ import asyncio
 import json
 import math
 import os
+import threading
 import time
 import urllib.request
 import cv2
+import numpy as np
 import mediapipe as mp
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision
@@ -34,9 +36,9 @@ def ensure_model():
 class OneEuroFilter:
     """Adaptive frequency-domain filter for jitter-free, zero-lag tracking."""
     def __init__(self, min_cutoff=1.0, beta=0.007, d_cutoff=1.0):
-        self.min_cutoff = min_cutoff
-        self.beta = beta
-        self.d_cutoff = d_cutoff
+        self.min_cutoff = float(min_cutoff)
+        self.beta = float(beta)
+        self.d_cutoff = float(d_cutoff)
         self.x_prev = None
         self.dx_prev = 0.0
         self.t_prev = None
@@ -47,6 +49,7 @@ class OneEuroFilter:
         return r / (r + 1.0)
 
     def __call__(self, x, t=None):
+        x = float(x)
         if t is None:
             t = time.time()
         if self.t_prev is None:
@@ -82,24 +85,24 @@ class HandState:
             "depth": OneEuroFilter(min_cutoff=1.0, beta=0.005),
             "pinch": OneEuroFilter(min_cutoff=2.0, beta=0.004),
         }
-        self.x = self.filters["x"](raw_cx, now)
-        self.y = self.filters["y"](raw_cy, now)
-        self.depth = self.filters["depth"](raw_depth, now)
-        self.pinch = self.filters["pinch"](raw_pinch, now)
+        self.x = float(self.filters["x"](raw_cx, now))
+        self.y = float(self.filters["y"](raw_cy, now))
+        self.depth = float(self.filters["depth"](raw_depth, now))
+        self.pinch = float(self.filters["pinch"](raw_pinch, now))
 
         self.vx = 0.0
         self.vy = 0.0
-        self.prev_x = raw_cx
-        self.prev_y = raw_cy
-        self.is_pinching = raw_pinch < 0.22
-        self.label = label
-        self.is_open = is_open
+        self.prev_x = float(raw_cx)
+        self.prev_y = float(raw_cy)
+        self.is_pinching = bool(raw_pinch < 0.22)
+        self.label = str(label)
+        self.is_open = bool(is_open)
 
         # Knuckle flexion & bloom tracking
-        self.avg_angle = avg_angle
-        self.prev_avg_angle = avg_angle
+        self.avg_angle = float(avg_angle)
+        self.prev_avg_angle = float(avg_angle)
         self.angle_vel = 0.0
-        self.is_fist = avg_angle < 65.0
+        self.is_fist = bool(avg_angle < 65.0)
         self.bloom_triggered = False
 
         # 3D palm normal Euler angles
@@ -109,33 +112,33 @@ class HandState:
 
     def update(self, raw_cx, raw_cy, raw_depth, raw_pinch, label, is_open, avg_angle, dt, now,
                pitch=0.0, yaw=0.0, roll=0.0):
-        self.x = self.filters["x"](raw_cx, now)
-        self.y = self.filters["y"](raw_cy, now)
-        self.depth = self.filters["depth"](raw_depth, now)
-        self.pinch = self.filters["pinch"](raw_pinch, now)
+        self.x = float(self.filters["x"](raw_cx, now))
+        self.y = float(self.filters["y"](raw_cy, now))
+        self.depth = float(self.filters["depth"](raw_depth, now))
+        self.pinch = float(self.filters["pinch"](raw_pinch, now))
 
         vx = (self.x - self.prev_x) / dt
         vy = (self.y - self.prev_y) / dt
-        self.vx = self.vx * 0.55 + vx * 0.45
-        self.vy = self.vy * 0.55 + vy * 0.45
+        self.vx = float(self.vx * 0.55 + vx * 0.45)
+        self.vy = float(self.vy * 0.55 + vy * 0.45)
         self.prev_x = self.x
         self.prev_y = self.y
 
         d_angle_deg = (avg_angle - self.prev_avg_angle) / dt
         d_angle_rad = d_angle_deg * (math.pi / 180.0)
-        self.angle_vel = self.angle_vel * 0.4 + d_angle_rad * 0.6
-        self.prev_avg_angle = avg_angle
-        self.avg_angle = avg_angle
+        self.angle_vel = float(self.angle_vel * 0.4 + d_angle_rad * 0.6)
+        self.prev_avg_angle = float(avg_angle)
+        self.avg_angle = float(avg_angle)
 
         was_fist = self.is_fist
-        self.is_fist = avg_angle < 65.0
-        self.bloom_triggered = (was_fist or avg_angle < 85.0) and (self.angle_vel > 2.8) and (avg_angle > 110.0)
+        self.is_fist = bool(avg_angle < 65.0)
+        self.bloom_triggered = bool((was_fist or avg_angle < 85.0) and (self.angle_vel > 2.8) and (avg_angle > 110.0))
 
-        self.label = label
-        self.is_open = is_open
-        self.pitch = pitch
-        self.yaw = yaw
-        self.roll = roll
+        self.label = str(label)
+        self.is_open = bool(is_open)
+        self.pitch = float(pitch)
+        self.yaw = float(yaw)
+        self.roll = float(roll)
 
         # Scale-invariant pinch hysteresis
         if self.is_pinching:
@@ -172,7 +175,11 @@ class GestureEngine:
         self.dual_cy_filter   = OneEuroFilter(min_cutoff=1.5, beta=0.008)
         self.dual_angle_filter = OneEuroFilter(min_cutoff=1.0, beta=0.005)
 
+        # Atomic thread variables for decoupled MJPEG streaming
         self.latest_jpeg = None
+        self.stream_viewers = 0
+        self._jpeg_lock = threading.Lock()
+
         self.last_frame_time = time.time()
         self.latest_state = {
             "hands": [],
@@ -208,14 +215,26 @@ class GestureEngine:
             self.connected_clients -= dead
 
     async def generate_mjpeg_stream(self):
-        """Asynchronous generator yielding live JPEG frames for in-browser HUD streaming."""
-        while self.running:
-            if self.latest_jpeg is not None:
-                yield (
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n\r\n" + self.latest_jpeg + b"\r\n"
-                )
-            await asyncio.sleep(0.033)  # ~30 fps browser preview
+        """Asynchronous generator yielding live JPEG frames with safe viewer lifecycle."""
+        self.stream_viewers += 1
+        last_sent = None
+        try:
+            while self.running:
+                jpeg_data = None
+                with self._jpeg_lock:
+                    if self.latest_jpeg is not None and self.latest_jpeg is not last_sent:
+                        jpeg_data = self.latest_jpeg
+                        last_sent = jpeg_data
+                if jpeg_data is not None:
+                    yield (
+                        b"--frame\r\n"
+                        b"Content-Type: image/jpeg\r\n\r\n" + jpeg_data + b"\r\n"
+                    )
+                await asyncio.sleep(0.016)  # Non-blocking 60 FPS polling
+        except (asyncio.CancelledError, GeneratorExit, Exception):
+            pass
+        finally:
+            self.stream_viewers = max(0, self.stream_viewers - 1)
 
     async def generate_mjpeg(self):
         """Alias for generate_mjpeg_stream."""
@@ -228,7 +247,7 @@ class GestureEngine:
 
     @staticmethod
     def _vec3(p):
-        return (p.x, p.y, p.z)
+        return (float(p.x), float(p.y), float(p.z))
 
     @staticmethod
     def _sub(a, b):
@@ -245,7 +264,7 @@ class GestureEngine:
     @staticmethod
     def _norm(v):
         m = math.sqrt(v[0]**2 + v[1]**2 + v[2]**2)
-        return (v[0]/m, v[1]/m, v[2]/m) if m > 1e-9 else (0, 0, 0)
+        return (v[0]/m, v[1]/m, v[2]/m) if m > 1e-9 else (0.0, 0.0, 0.0)
 
     def _joint_angle(self, a, b, c):
         v1 = self._sub(self._vec3(a), self._vec3(b))
@@ -305,7 +324,7 @@ class GestureEngine:
                 detected_labels.add(label)
                 self.persistence_counters[label] = 4  # 4-frame persistence
 
-                # ── Draw 21-node skeletal mesh on frame for in-browser stream ──
+                # ── Render 21-node skeletal mesh on frame ────────────────
                 for start_idx, end_idx in HAND_CONNECTIONS:
                     pt1 = (int(lms[start_idx].x * w), int(lms[start_idx].y * h))
                     pt2 = (int(lms[end_idx].x * w), int(lms[end_idx].y * h))
@@ -432,30 +451,49 @@ class GestureEngine:
             "slap_impulse": {"active": slap_active, "vx": slap_vx, "vy": slap_vy}
         }
 
-        # Encode live JPEG for in-browser streaming endpoint (Quality: 80)
-        ret, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-        if ret:
-            self.latest_jpeg = jpeg.tobytes()
+        # ── Conditional HUD Encoding (Only when viewers are connected) ──
+        if self.stream_viewers > 0:
+            preview = cv2.resize(frame, (480, 270), interpolation=cv2.INTER_LINEAR)
+            ret, jpeg = cv2.imencode('.jpg', preview, [cv2.IMWRITE_JPEG_QUALITY, 65])
+            if ret:
+                with self._jpeg_lock:
+                    self.latest_jpeg = jpeg.tobytes()
 
         return frame
 
     def run_capture(self, loop):
-        cap = cv2.VideoCapture(0)
+        def open_camera():
+            cap = cv2.VideoCapture(0)
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+            cap.set(cv2.CAP_PROP_FPS, 60)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            return cap
 
-        # 60 FPS hardware capture optimization
-        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-        cap.set(cv2.CAP_PROP_FPS, 60)
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        cap = open_camera()
+        consecutive_drops = 0
 
-        # Headless capture loop (NO cv2.imshow / waitKey desktop pop-ups)
-        while self.running and cap.isOpened():
+        # Headless capture loop with automatic watchdog recovery
+        while self.running:
+            if not cap.isOpened():
+                time.sleep(0.5)
+                cap = open_camera()
+                continue
+
             ret, frame = cap.read()
             if not ret:
+                consecutive_drops += 1
+                if consecutive_drops >= 5:
+                    print("[PIPO Vision] Watchdog: 5 dropped frames. Recovering camera pipeline...")
+                    cap.release()
+                    time.sleep(0.2)
+                    cap = open_camera()
+                    consecutive_drops = 0
                 time.sleep(0.005)
                 continue
 
+            consecutive_drops = 0
             frame = cv2.flip(frame, 1)
             self.process_frame(frame)
 
