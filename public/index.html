@@ -6,11 +6,12 @@
     <title>PIPO</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <canvas id="ascii-canvas"></canvas>
+    <canvas id="fx-canvas"></canvas>
 
     <div class="hud">
         <header class="hud-top">
@@ -106,6 +107,9 @@
                 <span>GESTURE MANUAL</span>
             </div>
             <div class="gesture-cards">
+                <div class="manual-card snap-card">
+                    <span class="snap-label">SNAP</span>
+                </div>
                 <div class="gesture-card">
                     <div class="gesture-badge">HOVER</div>
                     <div class="gesture-desc">Open palm stops auto-spin and tilts 3D parallax</div>

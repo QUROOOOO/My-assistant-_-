@@ -1,16 +1,27 @@
 const canvas = document.getElementById('ascii-canvas');
 const ctx = canvas.getContext('2d');
+const fxCanvas = document.getElementById('fx-canvas');
+const fxCtx = fxCanvas.getContext('2d');
+
 const handsMeter = document.getElementById('hands-meter');
 const wsStatus = document.getElementById('ws-status');
+const hudElement = document.querySelector('.hud');
+const settingsDrawer = document.getElementById('settings-drawer');
+const sensorHud = document.getElementById('sensor-hud');
 
 let width, height, dpr;
 function resize() {
     dpr = window.devicePixelRatio || 1;
     width = window.innerWidth;
     height = window.innerHeight;
+
     canvas.width = width * dpr;
     canvas.height = height * dpr;
     ctx.scale(dpr, dpr);
+
+    fxCanvas.width = width * dpr;
+    fxCanvas.height = height * dpr;
+    fxCtx.scale(dpr, dpr);
 }
 window.addEventListener('resize', resize);
 resize();
@@ -113,7 +124,7 @@ for (let a = 0; a <= 100; a++) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 2. ORB STATE & KINEMATICS
+// 2. ORB STATE & CONTINUOUS MOTION KINEMATICS
 // ═══════════════════════════════════════════════════════════════════════════
 let orbCenter = { x: width / 2, y: height / 2 };
 let targetOrbCenter = { x: width / 2, y: height / 2 };
@@ -123,7 +134,7 @@ let angularVelX = 0, angularVelY = 0, angularVelZ = 0;
 let currentScale = 1.0;
 let targetScale = 1.0;
 
-let gestureState = 'IDLE'; // IDLE | HOVER | GRAB | DUAL_PINCH | COMPRESS | BLOOM | SWIPE
+let gestureState = 'IDLE'; // IDLE | HOVER | GRAB | DUAL_PINCH | COMPRESS | BLOOM | SWIPE | SNAP
 let anchorDualDist = 0.0;
 let anchorDualScale = 1.0;
 let anchorGrabHand = { x: 0, y: 0, depth: 1.0 };
@@ -148,7 +159,180 @@ let audioMode = 'both';
 let hasHands = false;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 3. AMPLIFIED ACOUSTIC FILTERING & STOCHASTIC SOLAR FLARE ENGINE
+// 3. AVENGERS DISINTEGRATION & REVERSE MATERIALIZATION ENGINE ("THE BLIP")
+// ═══════════════════════════════════════════════════════════════════════════
+let isDisintegrated = false;
+let blipAnimationActive = false;
+let blipMode = 'DISINTEGRATE'; // 'DISINTEGRATE' | 'MATERIALIZE'
+let blipStartTime = 0;
+const BLIP_DISINTEGRATE_TIME = 2.2; // seconds to blow away off top-right
+const BLIP_MATERIALIZE_TIME = 1.4;  // seconds for magnetic reverse return
+
+const DUST_PARTICLE_COUNT = 3500;
+const dustParticles = [];
+
+for (let p = 0; p < DUST_PARTICLE_COUNT; p++) {
+    dustParticles.push({
+        x: 0, y: 0,
+        x0: 0, y0: 0,
+        spawnX: 0, spawnY: 0,
+        vx: 0, vy: 0,
+        size: 1.2 + Math.random() * 1.6,
+        alpha: 1.0,
+        curlFreq: 0.015 + Math.random() * 0.02,
+        curlAmp: 1.5 + Math.random() * 2.2,
+        seed: Math.random() * 100
+    });
+}
+
+function collectUiAndOrbTargets() {
+    const targets = [];
+
+    // Sample 1,400 Orb Nodes
+    for (let i = 0; i < POINT_COUNT; i++) {
+        targets.push({ x: projX[i] || (width / 2), y: projY[i] || (height / 2) });
+    }
+
+    // Sample DOM UI Element Bounding Boxes
+    const uiSelectors = ['.brand', '.status-pill', '#camera-feed-toggle', '#settings-btn', '.minimal-pill'];
+    uiSelectors.forEach(sel => {
+        const el = document.querySelector(sel);
+        if (el) {
+            const rect = el.getBoundingClientRect();
+            const sampleCount = 80;
+            for (let s = 0; s < sampleCount; s++) {
+                targets.push({
+                    x: rect.left + Math.random() * rect.width,
+                    y: rect.top + Math.random() * rect.height
+                });
+            }
+        }
+    });
+
+    // Fill remaining targets with central scatter
+    while (targets.length < DUST_PARTICLE_COUNT) {
+        targets.push({
+            x: orbCenter.x + (Math.random() - 0.5) * R0 * 2,
+            y: orbCenter.y + (Math.random() - 0.5) * R0 * 2
+        });
+    }
+
+    return targets;
+}
+
+function triggerSnapEffect() {
+    const now = performance.now() / 1000;
+    blipStartTime = now;
+    blipAnimationActive = true;
+
+    if (!isDisintegrated) {
+        // ── SNAP 1: DISINTEGRATION ("THE BLIP") ────────────────────────
+        blipMode = 'DISINTEGRATE';
+        const targets = collectUiAndOrbTargets();
+
+        for (let i = 0; i < DUST_PARTICLE_COUNT; i++) {
+            const dp = dustParticles[i];
+            const t = targets[i % targets.length];
+            dp.x0 = t.x;
+            dp.y0 = t.y;
+            dp.x = t.x;
+            dp.y = t.y;
+            // Upward-right drift trajectory: Vx > 0, Vy < 0
+            dp.vx = 3.5 + Math.random() * 4.0;
+            dp.vy = -4.0 - Math.random() * 3.5;
+            dp.alpha = 0.95;
+        }
+
+        // Seamlessly fade DOM UI & Primary Canvas
+        hudElement.classList.add('disintegrated');
+        canvas.classList.add('disintegrated');
+        settingsDrawer.classList.add('disintegrated');
+        if (sensorHud) sensorHud.classList.add('disintegrated');
+
+        isDisintegrated = true;
+    } else {
+        // ── SNAP 2: REVERSE GRAVITATIONAL MATERIALIZATION ──────────────
+        blipMode = 'MATERIALIZE';
+        const targets = collectUiAndOrbTargets();
+
+        for (let i = 0; i < DUST_PARTICLE_COUNT; i++) {
+            const dp = dustParticles[i];
+            const t = targets[i % targets.length];
+            dp.x0 = t.x;
+            dp.y0 = t.y;
+            // Spawn off-screen from top-right corner
+            dp.spawnX = width + 50 + Math.random() * 250;
+            dp.spawnY = -50 - Math.random() * 250;
+            dp.x = dp.spawnX;
+            dp.y = dp.spawnY;
+            dp.alpha = 0.2;
+        }
+
+        isDisintegrated = false;
+    }
+}
+
+function updateBlipFX(nowSec) {
+    if (!blipAnimationActive) return;
+
+    const elapsed = nowSec - blipStartTime;
+    fxCtx.clearRect(0, 0, width, height);
+
+    if (blipMode === 'DISINTEGRATE') {
+        const progress = Math.min(elapsed / BLIP_DISINTEGRATE_TIME, 1.0);
+
+        for (let i = 0; i < DUST_PARTICLE_COUNT; i++) {
+            const dp = dustParticles[i];
+            const curlX = Math.sin(dp.y * dp.curlFreq + elapsed * 3.0 + dp.seed) * dp.curlAmp;
+            const curlY = Math.cos(dp.x * dp.curlFreq + elapsed * 3.0 + dp.seed) * dp.curlAmp;
+
+            dp.x += (dp.vx + curlX) * 1.5;
+            dp.y += (dp.vy + curlY) * 1.5;
+            dp.alpha = Math.max(0.0, 1.0 - Math.pow(progress, 1.4));
+
+            if (dp.alpha > 0.01) {
+                fxCtx.fillStyle = `rgba(180, 180, 195, ${dp.alpha.toFixed(2)})`;
+                fxCtx.fillRect(dp.x, dp.y, dp.size, dp.size);
+            }
+        }
+
+        if (progress >= 1.0) {
+            blipAnimationActive = false;
+            fxCtx.clearRect(0, 0, width, height);
+        }
+    } else if (blipMode === 'MATERIALIZE') {
+        const progress = Math.min(elapsed / BLIP_MATERIALIZE_TIME, 1.0);
+
+        for (let i = 0; i < DUST_PARTICLE_COUNT; i++) {
+            const dp = dustParticles[i];
+
+            // Reverse magnetic trajectory: accelerate into (x0, y0) with spring settling
+            const springEase = Math.sin(progress * Math.PI * 0.5);
+            const curlX = Math.sin(elapsed * 4.0 + dp.seed) * (1.0 - progress) * 12.0;
+            const curlY = Math.cos(elapsed * 4.0 + dp.seed) * (1.0 - progress) * 12.0;
+
+            dp.x = dp.spawnX + (dp.x0 - dp.spawnX) * springEase + curlX;
+            dp.y = dp.spawnY + (dp.y0 - dp.spawnY) * springEase + curlY;
+            dp.alpha = Math.min(1.0, progress * 1.2);
+
+            fxCtx.fillStyle = `rgba(192, 184, 210, ${dp.alpha.toFixed(2)})`;
+            fxCtx.fillRect(dp.x, dp.y, dp.size, dp.size);
+        }
+
+        if (progress >= 1.0) {
+            blipAnimationActive = false;
+            fxCtx.clearRect(0, 0, width, height);
+            // Restore DOM and Canvas Visibility
+            hudElement.classList.remove('disintegrated');
+            canvas.classList.remove('disintegrated');
+            settingsDrawer.classList.remove('disintegrated');
+            if (sensorHud) sensorHud.classList.remove('disintegrated');
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 4. AMPLIFIED ACOUSTIC FILTERING & STOCHASTIC SOLAR FLARE ENGINE
 // ═══════════════════════════════════════════════════════════════════════════
 let audioCtx, analyser, biquadFilter, micSource;
 let audioDataArray;
@@ -208,7 +392,6 @@ function updateAudioEnergy() {
     let gatedEnergy = 0.0;
     const gateThreshold = ambientNoiseFloor * 1.4;
     if (rawEnergy > gateThreshold) {
-        // Boosted baseline sensitivity (12.5x multiplier)
         gatedEnergy = Math.min((rawEnergy - gateThreshold) * sensitivity * 12.5, 1.0);
 
         // Stochastic Localized Solar Flare Trigger on Transient Audio Peaks
@@ -227,7 +410,7 @@ function updateAudioEnergy() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 4. REFINED GESTURE ARBITRATION & DUAL/SINGLE PINCH MODES
+// 5. REFINED GESTURE ARBITRATION & WEBSOCKET TELEMETRY
 // ═══════════════════════════════════════════════════════════════════════════
 function connectWS() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -243,6 +426,11 @@ function connectWS() {
             const handCount = data.hands ? data.hands.length : 0;
 
             handsMeter.innerText = `${handCount} HAND${handCount === 1 ? '' : 'S'}`;
+
+            // Trigger Cinematic SNAP Disintegration / Materialization
+            if (data.event === 'SNAP' || data.state === 'SNAP' || data.snap) {
+                triggerSnapEffect();
+            }
 
             // Trigger Supernova Cosmic Particle Burst
             if (data.bloom || data.state === 'BLOOM') {
@@ -295,7 +483,7 @@ function connectWS() {
                 // ── STATE 3: UNSTABLE PLASMA FIST COMPRESSION (0.42 * R0) ───
                 else if (data.state === 'COMPRESS' || data.compress || data.hands.some(h => h.is_fist)) {
                     gestureState = 'COMPRESS';
-                    targetScale = 0.42; // Compressed base equilibrium radius
+                    targetScale = 0.42;
                     const primary = data.hands[0];
                     targetRotY = (primary.palm_x - 0.5) * 1.3;
                     targetRotX = (primary.palm_y - 0.5) * 1.3;
@@ -343,14 +531,12 @@ function connectWS() {
 connectWS();
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 5. UI CONTROLS & FLOATING LIVE FEED HUD
+// 6. UI CONTROLS & FLOATING LIVE FEED HUD
 // ═══════════════════════════════════════════════════════════════════════════
-const settingsDrawer = document.getElementById('settings-drawer');
 document.getElementById('settings-btn').onclick = () => settingsDrawer.classList.add('open');
 document.getElementById('close-settings').onclick = () => settingsDrawer.classList.remove('open');
 
 const cameraToggleBtn = document.getElementById('camera-feed-toggle');
-const sensorHud = document.getElementById('sensor-hud');
 const closeSensorHudBtn = document.getElementById('close-sensor-hud');
 const sensorStreamImg = document.getElementById('sensor-stream-img');
 
@@ -425,7 +611,7 @@ document.getElementById('speed-slider').oninput = (e) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 6. HIGH-PERFORMANCE RENDER LOOP — Batched Glyph Drawing & Solar Flares
+// 7. HIGH-PERFORMANCE RENDER LOOP WITH GENTLE CONTINUOUS DYNAMICS
 // ═══════════════════════════════════════════════════════════════════════════
 let time = 0;
 
@@ -435,16 +621,16 @@ function render() {
     time += 0.015 * speedMult;
 
     updateAudioEnergy();
+    updateBlipFX(nowSec);
 
-    // Damped position & scale interpolation
-    const springK = gestureState === 'DUAL_PINCH' ? 0.14 : (gestureState === 'GRAB' ? 0.15 : 0.12);
-    orbCenter.x += (targetOrbCenter.x - orbCenter.x) * springK;
-    orbCenter.y += (targetOrbCenter.y - orbCenter.y) * springK;
-    currentScale += (targetScale - currentScale) * springK;
+    // Continuous Exponential Smoothing
+    orbCenter.x += (targetOrbCenter.x - orbCenter.x) * 0.05;
+    orbCenter.y += (targetOrbCenter.y - orbCenter.y) * 0.05;
+    currentScale += (targetScale - currentScale) * 0.04;
 
-    // Smooth Idle-to-Hover Deceleration: omega(t) = omega0 * exp(-t / 0.32)
+    // Smooth Idle-to-Hover Deceleration
     if (gestureState === 'IDLE') {
-        targetRotY += 0.003 * speedMult; // Continuous slow auto-rotation (0.003 rad/frame)
+        targetRotY += 0.003 * speedMult;
     } else if (gestureState === 'HOVER') {
         const hoverElapsed = nowSec - handEnterTime;
         const decayRot = 0.003 * Math.exp(-hoverElapsed / 0.32);
@@ -453,13 +639,19 @@ function render() {
         }
     }
 
-    rotX += (targetRotX - rotX) * 0.038 + angularVelX;
-    rotY += (targetRotY - rotY) * 0.038 + angularVelY;
-    rotZ += (targetRotZ - rotZ) * 0.038 + angularVelZ;
+    rotX += (targetRotX - rotX) * 0.045 + angularVelX;
+    rotY += (targetRotY - rotY) * 0.045 + angularVelY;
+    rotZ += (targetRotZ - rotZ) * 0.045 + angularVelZ;
 
     angularVelX *= 0.95;
     angularVelY *= 0.95;
     angularVelZ *= 0.95;
+
+    // Skip drawing the primary orb if disintegrated into FX canvas
+    if (isDisintegrated && !blipAnimationActive) {
+        ctx.clearRect(0, 0, width, height);
+        return;
+    }
 
     // ── 3D Supernova Cosmic Burst & 3-Phase Gravitational Reassembly ────
     let burstTotalElapsed = 0.0;
@@ -475,16 +667,16 @@ function render() {
             inReassemblyPhase = true;
             const tRe = burstTotalElapsed - BURST_EXPAND_TIME;
 
-            // Phase 1 (0.0s – 0.5s): Slow initial inward drift (breaking outward momentum)
+            // Phase 1 (0.0s – 0.5s): Slow initial inward drift
             if (tRe < 0.5) {
                 reassemblyProgressFactor = 1.0 - 0.08 * (tRe / 0.5);
             }
-            // Phase 2 (0.5s – 1.0s): Rapid non-linear gravitational acceleration toward core (a ~ 1/r^2)
+            // Phase 2 (0.5s – 1.0s): Rapid gravitational acceleration
             else if (tRe < 1.0) {
                 const p = (tRe - 0.5) / 0.5;
                 reassemblyProgressFactor = 0.92 * (1.0 - Math.pow(p, 2.8));
             }
-            // Phase 3 (1.0s – 1.3s): Elastic damped spring relaxation settling cleanly into R0
+            // Phase 3 (1.0s – 1.3s): Elastic spring settling into R0
             else {
                 const p = (tRe - 1.0) / 0.3;
                 reassemblyProgressFactor = -0.12 * Math.sin(p * Math.PI * 2.5) * Math.exp(-6.0 * p);
@@ -505,7 +697,7 @@ function render() {
     const isCompress = gestureState === 'COMPRESS';
     const minBound = 0.40 * R0;
     const maxBound = 1.50 * R0;
-    const sigmaSq2 = 2.0 * (0.35 * 0.35); // 2 * sigma^2 for Gaussian solar flare curve
+    const sigmaSq2 = 2.0 * (0.35 * 0.35);
 
     for (let i = 0; i < POINT_COUNT; i++) {
         const nx = nodeNx[i];
@@ -519,7 +711,6 @@ function render() {
         let glyphChar = '·';
 
         if (inBurstPhase || inReassemblyPhase) {
-            // Trajectory: P(t) = P0 + V * t * exp(-0.35 * t)
             const tPeak = BURST_EXPAND_TIME;
             const peakDisp = tPeak * Math.exp(-0.35 * tPeak);
 
@@ -545,10 +736,9 @@ function render() {
             const glyphSeed = Math.floor(burstSeed[i] + time * 18 + i) % BURST_CHARS.length;
             glyphChar = BURST_CHARS[glyphSeed];
         } else {
-            // Idle organic surface breathing
             const idleWave = 0.010 * Math.sin(2.0 * theta + 3.0 * phi + time);
 
-            // Stochastic Localized Solar Flare Summation across 16 Centroids
+            // 16 Localized Solar Flares
             let flareSum = 0.0;
             for (let k = 0; k < FLARE_COUNT; k++) {
                 if (flareEnergies[k] > 0.005) {
@@ -561,7 +751,7 @@ function render() {
             }
             let deltaR = R0 * (idleWave + flareSum * 0.35);
 
-            // Unstable High-Energy Plasma Core Fist Compression (0.42 * R0, 45Hz Jitter, Micro-Arcs)
+            // Fist Plasma Compression
             if (isCompress) {
                 const microVib = Math.sin(time * 90.0 + i * 23.0) * 2.5;
                 const arc1 = Math.sin(18.0 * theta + 14.0 * phi + 35.0 * time);
@@ -604,7 +794,7 @@ function render() {
                     Math.floor(clampedZ * (PLASMA_CHARS.length - 1))
                 );
                 glyphChar = PLASMA_CHARS[plasmaIdx];
-                nodeAlpha = 1.0; // Full opacity on compressed plasma core
+                nodeAlpha = 1.0;
             } else {
                 const rawGlyphIdx = Math.min(
                     ASCII_CHARS.length - 1,
@@ -623,13 +813,11 @@ function render() {
         projAlphaIdx[i] = Math.max(0, Math.min(100, Math.floor(nodeAlpha * 100)));
     }
 
-    // Depth Sorting (Back-to-front index array sort)
     renderOrder.sort((a, b) => projZ[a] - projZ[b]);
 
     const isDark = currentTheme === 'dark';
     const colorCache = isDark ? DARK_COLOR_CACHE : LIGHT_COLOR_CACHE;
 
-    // Batched Glyph Rendering
     for (let j = 0; j < POINT_COUNT; j++) {
         const i = renderOrder[j];
 

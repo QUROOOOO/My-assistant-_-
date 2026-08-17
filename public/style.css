@@ -513,3 +513,52 @@ body, html {
     color: var(--text-dim);
     line-height: 1.35;
 }
+
+/* Dedicated SNAP Gesture Manual Card */
+.manual-card.snap-card {
+    background: rgba(192, 132, 252, 0.08);
+    border: 1px solid rgba(192, 132, 252, 0.35);
+    border-radius: 8px;
+    padding: 0.65rem 0.8rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s ease, border-color 0.2s ease, transform 0.15s ease;
+}
+
+.manual-card.snap-card:hover {
+    background: rgba(192, 132, 252, 0.14);
+    border-color: rgba(192, 132, 252, 0.55);
+    transform: translateX(2px);
+}
+
+.snap-label {
+    color: #c084fc;
+    font-weight: 800;
+    letter-spacing: 3px;
+    font-size: 0.95rem;
+    text-shadow: 0 0 12px rgba(192, 132, 252, 0.4);
+    text-align: center;
+    width: 100%;
+    display: block;
+}
+
+/* Full-Screen Avengers Disintegration & Materialization FX Canvas */
+#fx-canvas {
+    pointer-events: none;
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    width: 100vw;
+    height: 100vh;
+}
+
+/* Seamless DOM Disintegration Transition */
+.hud.disintegrated,
+#ascii-canvas.disintegrated,
+.settings-drawer.disintegrated,
+.sensor-hud.disintegrated {
+    opacity: 0 !important;
+    pointer-events: none !important;
+    transition: opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
