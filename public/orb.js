@@ -8,6 +8,8 @@ const wsStatus = document.getElementById('ws-status');
 const hudElement = document.querySelector('.hud');
 const settingsDrawer = document.getElementById('settings-drawer');
 const sensorHud = document.getElementById('sensor-hud');
+const liveFeedCanvas = document.getElementById('live-feed-canvas');
+const liveFeedCtx = liveFeedCanvas ? liveFeedCanvas.getContext('2d') : null;
 
 let width, height, dpr;
 function resize() {
@@ -61,8 +63,8 @@ for (let i = 0; i < POINT_COUNT; i++) {
     nodeTheta[i] = theta;
     nodePhi[i] = phi;
 
-    // 360° Omnidirectional Cosmic Dispersion (2.5x - 3.5x viewport scale)
-    const speed = 920.0 + Math.sin(i * 13.7) * 440.0;
+    // 360° Omnidirectional Cosmic Dispersion (3.0x viewport scale)
+    const speed = 950.0 + Math.sin(i * 13.7) * 450.0;
     const chaosX = Math.cos(i * 7.9) * 0.28;
     const chaosY = Math.sin(i * 11.3) * 0.28;
     const chaosZ = Math.cos(i * 14.1) * 0.28;
@@ -106,7 +108,7 @@ for (let i = 0; i < POINT_COUNT; i++) renderOrder[i] = i;
 
 // Density Gradients
 const ASCII_CHARS = ['·', '.', ':', '+', 'x', '*', '%', '0', '#', '@'];
-const PLASMA_CHARS = ['@', '#', '8', '%', '0'];
+const PLASMA_CHARS = ['@', '#', '%', '&', '8'];
 const BURST_CHARS = ['*', '+', '·', '%', '0', '@', 'x', '¤'];
 
 // Zero-Allocation String Caches
@@ -124,7 +126,7 @@ for (let a = 0; a <= 100; a++) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 2. ORB STATE & CONTINUOUS MOTION KINEMATICS
+// 2. ORB STATE & GENTLE CONTINUOUS MOTION KINEMATICS
 // ═══════════════════════════════════════════════════════════════════════════
 let orbCenter = { x: width / 2, y: height / 2 };
 let targetOrbCenter = { x: width / 2, y: height / 2 };
@@ -159,16 +161,15 @@ let audioMode = 'both';
 let hasHands = false;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 3. AVENGERS DISINTEGRATION & REVERSE MATERIALIZATION ENGINE ("THE BLIP")
+// 3. 3.5-SECOND CINEMATIC DUST DISINTEGRATION & DETERMINISTIC REINTEGRATION
 // ═══════════════════════════════════════════════════════════════════════════
 let isDisintegrated = false;
 let blipAnimationActive = false;
 let blipMode = 'DISINTEGRATE'; // 'DISINTEGRATE' | 'MATERIALIZE'
 let blipStartTime = 0;
-const BLIP_DISINTEGRATE_TIME = 2.2; // seconds to blow away off top-right
-const BLIP_MATERIALIZE_TIME = 1.4;  // seconds for magnetic reverse return
+const BLIP_DURATION = 3.5; // 3.5 seconds cinematic duration
 
-const DUST_PARTICLE_COUNT = 3500;
+const DUST_PARTICLE_COUNT = 4000;
 const dustParticles = [];
 
 for (let p = 0; p < DUST_PARTICLE_COUNT; p++) {
@@ -176,30 +177,31 @@ for (let p = 0; p < DUST_PARTICLE_COUNT; p++) {
         x: 0, y: 0,
         x0: 0, y0: 0,
         spawnX: 0, spawnY: 0,
-        vx: 0, vy: 0,
-        size: 1.2 + Math.random() * 1.6,
+        vx0: 0, vy0: 0,
+        size: 1.0 + Math.random() * 2.0,
         alpha: 1.0,
-        curlFreq: 0.015 + Math.random() * 0.02,
-        curlAmp: 1.5 + Math.random() * 2.2,
-        seed: Math.random() * 100
+        curlFreq: 0.012 + Math.random() * 0.018,
+        curlAmp: 1.4 + Math.random() * 2.2,
+        seed: Math.random() * 100,
+        colorType: Math.random() > 0.4 ? 'silver' : 'charcoal'
     });
 }
 
 function collectUiAndOrbTargets() {
     const targets = [];
 
-    // Sample 1,400 Orb Nodes
+    // 1,400 Orb Nodes
     for (let i = 0; i < POINT_COUNT; i++) {
         targets.push({ x: projX[i] || (width / 2), y: projY[i] || (height / 2) });
     }
 
-    // Sample DOM UI Element Bounding Boxes
+    // Visible DOM UI Elements
     const uiSelectors = ['.brand', '.status-pill', '#camera-feed-toggle', '#settings-btn', '.minimal-pill'];
     uiSelectors.forEach(sel => {
         const el = document.querySelector(sel);
         if (el) {
             const rect = el.getBoundingClientRect();
-            const sampleCount = 80;
+            const sampleCount = 90;
             for (let s = 0; s < sampleCount; s++) {
                 targets.push({
                     x: rect.left + Math.random() * rect.width,
@@ -209,11 +211,10 @@ function collectUiAndOrbTargets() {
         }
     });
 
-    // Fill remaining targets with central scatter
     while (targets.length < DUST_PARTICLE_COUNT) {
         targets.push({
-            x: orbCenter.x + (Math.random() - 0.5) * R0 * 2,
-            y: orbCenter.y + (Math.random() - 0.5) * R0 * 2
+            x: orbCenter.x + (Math.random() - 0.5) * R0 * 2.2,
+            y: orbCenter.y + (Math.random() - 0.5) * R0 * 2.2
         });
     }
 
@@ -226,7 +227,7 @@ function triggerSnapEffect() {
     blipAnimationActive = true;
 
     if (!isDisintegrated) {
-        // ── SNAP 1: DISINTEGRATION ("THE BLIP") ────────────────────────
+        // ── 3.5s DISINTEGRATION ("THE BLIP") ───────────────────────────
         blipMode = 'DISINTEGRATE';
         const targets = collectUiAndOrbTargets();
 
@@ -237,13 +238,13 @@ function triggerSnapEffect() {
             dp.y0 = t.y;
             dp.x = t.x;
             dp.y = t.y;
-            // Upward-right drift trajectory: Vx > 0, Vy < 0
-            dp.vx = 3.5 + Math.random() * 4.0;
-            dp.vy = -4.0 - Math.random() * 3.5;
+            // Upward-right wind force: V_x = 1.8 + rand(0, 2.2), V_y = -2.2 - rand(0, 2.0)
+            dp.vx0 = 1.8 + Math.random() * 2.2;
+            dp.vy0 = -2.2 - Math.random() * 2.0;
             dp.alpha = 0.95;
         }
 
-        // Seamlessly fade DOM UI & Primary Canvas
+        // Fade DOM UI and primary canvas
         hudElement.classList.add('disintegrated');
         canvas.classList.add('disintegrated');
         settingsDrawer.classList.add('disintegrated');
@@ -251,7 +252,7 @@ function triggerSnapEffect() {
 
         isDisintegrated = true;
     } else {
-        // ── SNAP 2: REVERSE GRAVITATIONAL MATERIALIZATION ──────────────
+        // ── 3.5s DETERMINISTIC REVERSE MATERIALIZATION ─────────────────
         blipMode = 'MATERIALIZE';
         const targets = collectUiAndOrbTargets();
 
@@ -260,12 +261,12 @@ function triggerSnapEffect() {
             const t = targets[i % targets.length];
             dp.x0 = t.x;
             dp.y0 = t.y;
-            // Spawn off-screen from top-right corner
-            dp.spawnX = width + 50 + Math.random() * 250;
-            dp.spawnY = -50 - Math.random() * 250;
+            // Spawn off-screen top-right corner
+            dp.spawnX = width + 40 + Math.random() * 320;
+            dp.spawnY = -40 - Math.random() * 320;
             dp.x = dp.spawnX;
             dp.y = dp.spawnY;
-            dp.alpha = 0.2;
+            dp.alpha = 0.15;
         }
 
         isDisintegrated = false;
@@ -279,19 +280,24 @@ function updateBlipFX(nowSec) {
     fxCtx.clearRect(0, 0, width, height);
 
     if (blipMode === 'DISINTEGRATE') {
-        const progress = Math.min(elapsed / BLIP_DISINTEGRATE_TIME, 1.0);
+        const progress = Math.min(elapsed / BLIP_DURATION, 1.0);
+        const tScale = 1.0 + 0.5 * elapsed;
 
         for (let i = 0; i < DUST_PARTICLE_COUNT; i++) {
             const dp = dustParticles[i];
-            const curlX = Math.sin(dp.y * dp.curlFreq + elapsed * 3.0 + dp.seed) * dp.curlAmp;
-            const curlY = Math.cos(dp.x * dp.curlFreq + elapsed * 3.0 + dp.seed) * dp.curlAmp;
+            const curlX = Math.sin(dp.y * dp.curlFreq + elapsed * 2.5 + dp.seed) * dp.curlAmp;
+            const curlY = Math.cos(dp.x * dp.curlFreq + elapsed * 2.5 + dp.seed) * dp.curlAmp;
 
-            dp.x += (dp.vx + curlX) * 1.5;
-            dp.y += (dp.vy + curlY) * 1.5;
-            dp.alpha = Math.max(0.0, 1.0 - Math.pow(progress, 1.4));
+            dp.x += (dp.vx0 * tScale + curlX) * 1.3;
+            dp.y += (dp.vy0 * tScale + curlY) * 1.3;
+
+            // Continuous alpha fade: alpha(t) = max(0, 1 - t / 3.5)
+            dp.alpha = Math.max(0.0, 1.0 - progress);
 
             if (dp.alpha > 0.01) {
-                fxCtx.fillStyle = `rgba(180, 180, 195, ${dp.alpha.toFixed(2)})`;
+                fxCtx.fillStyle = dp.colorType === 'silver'
+                    ? `rgba(195, 195, 210, ${dp.alpha.toFixed(2)})`
+                    : `rgba(90, 90, 105, ${(dp.alpha * 0.85).toFixed(2)})`;
                 fxCtx.fillRect(dp.x, dp.y, dp.size, dp.size);
             }
         }
@@ -301,21 +307,24 @@ function updateBlipFX(nowSec) {
             fxCtx.clearRect(0, 0, width, height);
         }
     } else if (blipMode === 'MATERIALIZE') {
-        const progress = Math.min(elapsed / BLIP_MATERIALIZE_TIME, 1.0);
+        const progress = Math.min(elapsed / BLIP_DURATION, 1.0);
+        // Non-linear gravitational easing: easeOutCubic(t / 3.5)
+        const ease = 1.0 - Math.pow(1.0 - progress, 3.0);
 
         for (let i = 0; i < DUST_PARTICLE_COUNT; i++) {
             const dp = dustParticles[i];
 
-            // Reverse magnetic trajectory: accelerate into (x0, y0) with spring settling
-            const springEase = Math.sin(progress * Math.PI * 0.5);
-            const curlX = Math.sin(elapsed * 4.0 + dp.seed) * (1.0 - progress) * 12.0;
-            const curlY = Math.cos(elapsed * 4.0 + dp.seed) * (1.0 - progress) * 12.0;
+            // Harmonic damped settling
+            const spiralCurlX = Math.sin(elapsed * 3.5 + dp.seed) * (1.0 - progress) * 16.0;
+            const spiralCurlY = Math.cos(elapsed * 3.5 + dp.seed) * (1.0 - progress) * 16.0;
 
-            dp.x = dp.spawnX + (dp.x0 - dp.spawnX) * springEase + curlX;
-            dp.y = dp.spawnY + (dp.y0 - dp.spawnY) * springEase + curlY;
-            dp.alpha = Math.min(1.0, progress * 1.2);
+            dp.x = dp.spawnX + (dp.x0 - dp.spawnX) * ease + spiralCurlX;
+            dp.y = dp.spawnY + (dp.y0 - dp.spawnY) * ease + spiralCurlY;
+            dp.alpha = Math.min(1.0, progress * 1.15);
 
-            fxCtx.fillStyle = `rgba(192, 184, 210, ${dp.alpha.toFixed(2)})`;
+            fxCtx.fillStyle = dp.colorType === 'silver'
+                ? `rgba(205, 195, 225, ${dp.alpha.toFixed(2)})`
+                : `rgba(120, 110, 140, ${(dp.alpha * 0.9).toFixed(2)})`;
             fxCtx.fillRect(dp.x, dp.y, dp.size, dp.size);
         }
 
@@ -332,12 +341,17 @@ function updateBlipFX(nowSec) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 4. AMPLIFIED ACOUSTIC FILTERING & STOCHASTIC SOLAR FLARE ENGINE
+// 4. MULTIMODAL ACOUSTIC TRANSIENT ANALYZER (2.8 kHz High-Pass Filter)
 // ═══════════════════════════════════════════════════════════════════════════
 let audioCtx, analyser, biquadFilter, micSource;
+let snapHighPassFilter, snapAnalyser, snapDataArray;
 let audioDataArray;
 let smoothAudio = 0.0;
 let prevRawAudio = 0.0;
+let prevSnapEnergy = 0.0;
+let cAudio = 0.0;
+let cVision = 0.0;
+let lastSnapTriggerTime = 0.0;
 let ambientNoiseFloor = 0.012;
 
 function initAudio() {
@@ -346,6 +360,7 @@ function initAudio() {
         const AC = window.AudioContext || window.webkitAudioContext;
         audioCtx = new AC();
 
+        // Vocal Bandpass Filter (180Hz – 4200Hz, Q = 0.65)
         biquadFilter = audioCtx.createBiquadFilter();
         biquadFilter.type = 'bandpass';
         biquadFilter.frequency.value = 2190;
@@ -356,10 +371,24 @@ function initAudio() {
         analyser.smoothingTimeConstant = 0.25;
         audioDataArray = new Uint8Array(analyser.frequencyBinCount);
 
+        // High-Frequency Acoustic Snap Transient Filter (fc = 2800 Hz, Q = 1.4)
+        snapHighPassFilter = audioCtx.createBiquadFilter();
+        snapHighPassFilter.type = 'highpass';
+        snapHighPassFilter.frequency.value = 2800;
+        snapHighPassFilter.Q.value = 1.4;
+
+        snapAnalyser = audioCtx.createAnalyser();
+        snapAnalyser.fftSize = 256;
+        snapAnalyser.smoothingTimeConstant = 0.10;
+        snapDataArray = new Uint8Array(snapAnalyser.frequencyBinCount);
+
         navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
             micSource = audioCtx.createMediaStreamSource(stream);
             micSource.connect(biquadFilter);
             biquadFilter.connect(analyser);
+
+            micSource.connect(snapHighPassFilter);
+            snapHighPassFilter.connect(snapAnalyser);
         }).catch(err => {
             console.warn("Microphone access deferred:", err);
         });
@@ -374,6 +403,9 @@ function updateAudioEnergy() {
     for (let k = 0; k < FLARE_COUNT; k++) {
         flareEnergies[k] *= 0.88;
     }
+
+    // Continuous acoustic confidence decay
+    cAudio = Math.max(0.0, cAudio - 0.04);
 
     if (audioMode === 'off' || !analyser || !audioDataArray) {
         smoothAudio += (0.0 - smoothAudio) * 0.10;
@@ -394,7 +426,6 @@ function updateAudioEnergy() {
     if (rawEnergy > gateThreshold) {
         gatedEnergy = Math.min((rawEnergy - gateThreshold) * sensitivity * 12.5, 1.0);
 
-        // Stochastic Localized Solar Flare Trigger on Transient Audio Peaks
         const deltaRMS = rawEnergy - prevRawAudio;
         if (deltaRMS > 0.025) {
             const triggerCount = 1 + Math.floor(Math.random() * 3);
@@ -407,10 +438,26 @@ function updateAudioEnergy() {
     }
     prevRawAudio = rawEnergy;
     smoothAudio += (gatedEnergy - smoothAudio) * 0.14;
+
+    // High-Frequency Acoustic Transient Evaluation
+    if (snapAnalyser && snapDataArray) {
+        snapAnalyser.getByteFrequencyData(snapDataArray);
+        let snapSum = 0;
+        for (let i = 0; i < snapDataArray.length; i++) {
+            snapSum += snapDataArray[i];
+        }
+        const highEnergy = (snapSum / snapDataArray.length) / 255.0;
+        const dEnergyHigh = highEnergy - prevSnapEnergy;
+        prevSnapEnergy = highEnergy;
+
+        if (dEnergyHigh > 0.035) {
+            cAudio = Math.min(1.0, (dEnergyHigh - 0.035) * 18.0 + 0.55);
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 5. REFINED GESTURE ARBITRATION & WEBSOCKET TELEMETRY
+// 5. REFINED GESTURE ARBITRATION & MULTIMODAL SNAP FUSION
 // ═══════════════════════════════════════════════════════════════════════════
 function connectWS() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -424,23 +471,34 @@ function connectWS() {
         try {
             const data = JSON.parse(e.data);
             const handCount = data.hands ? data.hands.length : 0;
+            const now = performance.now() / 1000;
 
             handsMeter.innerText = `${handCount} HAND${handCount === 1 ? '' : 'S'}`;
 
-            // Trigger Cinematic SNAP Disintegration / Materialization
-            if (data.event === 'SNAP' || data.state === 'SNAP' || data.snap) {
+            if (data.c_vision !== undefined) {
+                cVision = data.c_vision;
+            }
+
+            // ── MULTIMODAL SNAP FUSION TRIGGER ─────────────────────────────
+            // Condition A: Pure High-Confidence Vision (C_vision >= 0.82)
+            // Condition B: Fused Vision + Sound (C_vision >= 0.50 AND C_audio >= 0.55)
+            const conditionA = cVision >= 0.82 || data.event === 'SNAP' || data.snap;
+            const conditionB = cVision >= 0.50 && cAudio >= 0.55;
+
+            if ((conditionA || conditionB) && (now - lastSnapTriggerTime) > 2.0) {
+                lastSnapTriggerTime = now;
                 triggerSnapEffect();
             }
 
             // Trigger Supernova Cosmic Particle Burst
             if (data.bloom || data.state === 'BLOOM') {
                 burstActive = true;
-                burstStartTime = performance.now() / 1000;
+                burstStartTime = now;
             }
 
             if (handCount > 0) {
                 if (!hadHandsLastFrame) {
-                    handEnterTime = performance.now() / 1000;
+                    handEnterTime = now;
                 }
                 hadHandsLastFrame = true;
                 hasHands = true;
@@ -480,10 +538,10 @@ function connectWS() {
                     const depthRatio = (grabHand.depth_scale || 1.0) / anchorGrabHand.depth;
                     targetScale = Math.min(Math.max(anchorGrabScale * depthRatio * 0.85, 0.35), 2.2);
                 }
-                // ── STATE 3: UNSTABLE PLASMA FIST COMPRESSION (0.42 * R0) ───
+                // ── STATE 3: UNSTABLE PLASMA FIST COMPRESSION (0.40 * R0) ───
                 else if (data.state === 'COMPRESS' || data.compress || data.hands.some(h => h.is_fist)) {
                     gestureState = 'COMPRESS';
-                    targetScale = 0.42;
+                    targetScale = 0.40;
                     const primary = data.hands[0];
                     targetRotY = (primary.palm_x - 0.5) * 1.3;
                     targetRotX = (primary.palm_y - 0.5) * 1.3;
@@ -531,21 +589,39 @@ function connectWS() {
 connectWS();
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 6. UI CONTROLS & FLOATING LIVE FEED HUD
+// 6. TRUE 60 FPS WEBSOCKET BINARY LIVE FEED STREAM
 // ═══════════════════════════════════════════════════════════════════════════
-document.getElementById('settings-btn').onclick = () => settingsDrawer.classList.add('open');
-document.getElementById('close-settings').onclick = () => settingsDrawer.classList.remove('open');
-
+let liveFeedWs = null;
 const cameraToggleBtn = document.getElementById('camera-feed-toggle');
 const closeSensorHudBtn = document.getElementById('close-sensor-hud');
-const sensorStreamImg = document.getElementById('sensor-stream-img');
 
 function openSensorHud() {
     if (!sensorHud) return;
     sensorHud.classList.remove('hidden');
     if (cameraToggleBtn) cameraToggleBtn.classList.add('active');
-    if (sensorStreamImg) {
-        sensorStreamImg.src = '/video_feed?t=' + Date.now();
+
+    if (!liveFeedWs || liveFeedWs.readyState !== WebSocket.OPEN) {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        liveFeedWs = new WebSocket(`${protocol}//${window.location.host}/ws/live_feed`);
+        liveFeedWs.binaryType = 'blob';
+
+        liveFeedWs.onmessage = async (evt) => {
+            if (evt.data instanceof Blob) {
+                try {
+                    const bmp = await createImageBitmap(evt.data);
+                    if (liveFeedCtx) {
+                        liveFeedCtx.drawImage(bmp, 0, 0, 480, 270);
+                    }
+                    if (bmp.close) bmp.close();
+                } catch (e) {
+                    // Bitmap decode frame skip
+                }
+            }
+        };
+
+        liveFeedWs.onclose = () => {
+            liveFeedWs = null;
+        };
     }
 }
 
@@ -553,20 +629,14 @@ function closeSensorHud() {
     if (!sensorHud) return;
     sensorHud.classList.add('hidden');
     if (cameraToggleBtn) cameraToggleBtn.classList.remove('active');
-    if (sensorStreamImg) {
-        sensorStreamImg.src = '';
-        sensorStreamImg.removeAttribute('src');
-    }
-}
 
-if (sensorStreamImg) {
-    sensorStreamImg.onerror = () => {
-        setTimeout(() => {
-            if (sensorHud && !sensorHud.classList.contains('hidden')) {
-                sensorStreamImg.src = '/video_feed?t=' + Date.now();
-            }
-        }, 1000);
-    };
+    if (liveFeedWs) {
+        liveFeedWs.close();
+        liveFeedWs = null;
+    }
+    if (liveFeedCtx) {
+        liveFeedCtx.clearRect(0, 0, 480, 270);
+    }
 }
 
 if (cameraToggleBtn) {
@@ -582,6 +652,9 @@ if (cameraToggleBtn) {
 if (closeSensorHudBtn) {
     closeSensorHudBtn.addEventListener('click', closeSensorHud);
 }
+
+document.getElementById('settings-btn').onclick = () => settingsDrawer.classList.add('open');
+document.getElementById('close-settings').onclick = () => settingsDrawer.classList.remove('open');
 
 document.querySelectorAll('.segmented-group').forEach(group => {
     const buttons = group.querySelectorAll('.segmented-btn');
@@ -623,10 +696,10 @@ function render() {
     updateAudioEnergy();
     updateBlipFX(nowSec);
 
-    // Continuous Exponential Smoothing
-    orbCenter.x += (targetOrbCenter.x - orbCenter.x) * 0.05;
-    orbCenter.y += (targetOrbCenter.y - orbCenter.y) * 0.05;
-    currentScale += (targetScale - currentScale) * 0.04;
+    // Gentle Continuous Exponential Smoothing (0.038 - 0.050)
+    orbCenter.x += (targetOrbCenter.x - orbCenter.x) * 0.045;
+    orbCenter.y += (targetOrbCenter.y - orbCenter.y) * 0.045;
+    currentScale += (targetScale - currentScale) * 0.038;
 
     // Smooth Idle-to-Hover Deceleration
     if (gestureState === 'IDLE') {
@@ -639,15 +712,15 @@ function render() {
         }
     }
 
-    rotX += (targetRotX - rotX) * 0.045 + angularVelX;
-    rotY += (targetRotY - rotY) * 0.045 + angularVelY;
-    rotZ += (targetRotZ - rotZ) * 0.045 + angularVelZ;
+    rotX += (targetRotX - rotX) * 0.040 + angularVelX;
+    rotY += (targetRotY - rotY) * 0.040 + angularVelY;
+    rotZ += (targetRotZ - rotZ) * 0.040 + angularVelZ;
 
     angularVelX *= 0.95;
     angularVelY *= 0.95;
     angularVelZ *= 0.95;
 
-    // Skip drawing the primary orb if disintegrated into FX canvas
+    // Skip drawing primary orb if disintegrated into FX canvas
     if (isDisintegrated && !blipAnimationActive) {
         ctx.clearRect(0, 0, width, height);
         return;
@@ -695,7 +768,7 @@ function render() {
     const cosZ = Math.cos(rotZ), sinZ = Math.sin(rotZ);
 
     const isCompress = gestureState === 'COMPRESS';
-    const minBound = 0.40 * R0;
+    const minBound = 0.38 * R0;
     const maxBound = 1.50 * R0;
     const sigmaSq2 = 2.0 * (0.35 * 0.35);
 
@@ -751,14 +824,14 @@ function render() {
             }
             let deltaR = R0 * (idleWave + flareSum * 0.35);
 
-            // Fist Plasma Compression
+            // Unstable Energy Ball (Fist Compression 0.40 * R0)
             if (isCompress) {
-                const microVib = Math.sin(time * 90.0 + i * 23.0) * 2.5;
+                const microVib = Math.sin(time * 90.0 + i * 23.0) * 2.0;
                 const arc1 = Math.sin(18.0 * theta + 14.0 * phi + 35.0 * time);
                 const arc2 = Math.cos(22.0 * theta - 16.0 * phi + 28.0 * time);
-                const plasmaArc = (Math.max(0.0, arc1) * Math.max(0.0, arc2)) * R0 * 0.32;
+                const plasmaArc = (Math.max(0.0, arc1) * Math.max(0.0, arc2)) * R0 * 0.30;
 
-                deltaR = -R0 * 0.58 + microVib + plasmaArc;
+                deltaR = -R0 * 0.60 + microVib + plasmaArc;
             }
 
             const clampedR = Math.max(minBound, Math.min(maxBound, R0 + deltaR));
