@@ -1,4 +1,4 @@
-﻿import atexit
+import atexit
 import asyncio
 import os
 import shutil
@@ -7,6 +7,7 @@ import threading
 import webbrowser
 import uvicorn
 from fastapi import FastAPI, WebSocket
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from core.gesture_engine import GestureEngine
@@ -29,6 +30,13 @@ gesture_engine = GestureEngine()
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     await gesture_engine.register(websocket)
+
+@app.get("/video_feed")
+async def video_feed():
+    return StreamingResponse(
+        gesture_engine.generate_mjpeg(),
+        media_type="multipart/x-mixed-replace; boundary=frame"
+    )
 
 app.mount("/", StaticFiles(directory="public", html=True), name="public")
 

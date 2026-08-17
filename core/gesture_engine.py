@@ -58,12 +58,10 @@ class OneEuroFilter:
         te = max(t - self.t_prev, 1e-6)
         self.t_prev = t
 
-        # Derivative estimate (smoothed)
         a_d = self._smoothing_factor(te, self.d_cutoff)
         dx = (x - self.x_prev) / te
         dx_hat = a_d * dx + (1.0 - a_d) * self.dx_prev
 
-        # Adaptive cutoff
         cutoff = self.min_cutoff + self.beta * abs(dx_hat)
         a = self._smoothing_factor(te, cutoff)
         x_hat = a * x + (1.0 - a) * self.x_prev
@@ -74,7 +72,7 @@ class OneEuroFilter:
 
 
 # ---------------------------------------------------------------------------
-# Per-hand tracked state with 5-state kinematics
+# Per-hand tracked state keyed by handedness ("Left" / "Right")
 # ---------------------------------------------------------------------------
 class HandState:
     def __init__(self, raw_cx, raw_cy, raw_depth, raw_pinch, label, is_open, avg_angle, now):
@@ -111,13 +109,11 @@ class HandState:
 
     def update(self, raw_cx, raw_cy, raw_depth, raw_pinch, label, is_open, avg_angle, dt, now,
                pitch=0.0, yaw=0.0, roll=0.0):
-        # 1€ filter on all channels
         self.x = self.filters["x"](raw_cx, now)
         self.y = self.filters["y"](raw_cy, now)
         self.depth = self.filters["depth"](raw_depth, now)
         self.pinch = self.filters["pinch"](raw_pinch, now)
 
-        # Finite difference velocities
         vx = (self.x - self.prev_x) / dt
         vy = (self.y - self.prev_y) / dt
         self.vx = self.vx * 0.55 + vx * 0.45
@@ -125,18 +121,14 @@ class HandState:
         self.prev_x = self.x
         self.prev_y = self.y
 
-        # Knuckle angular velocity (in rad/s: degrees / 57.2958)
         d_angle_deg = (avg_angle - self.prev_avg_angle) / dt
         d_angle_rad = d_angle_deg * (math.pi / 180.0)
         self.angle_vel = self.angle_vel * 0.4 + d_angle_rad * 0.6
         self.prev_avg_angle = avg_angle
         self.avg_angle = avg_angle
 
-        # Fist compression state (< 65 degrees average flexion)
         was_fist = self.is_fist
         self.is_fist = avg_angle < 65.0
-
-        # Rapid bloom trigger (was fist or low angle, and snapping open with dθ/dt > 2.8 rad/s)
         self.bloom_triggered = (was_fist or avg_angle < 85.0) and (self.angle_vel > 2.8) and (avg_angle > 110.0)
 
         self.label = label
@@ -169,11 +161,22 @@ class GestureEngine:
         )
         self.detector = vision.HandLandmarker.create_from_options(options)
         self.running = True
-        self.hand_states = {}
-        self.persistence_counters = {}
+
+        # Handedness-keyed tracking dictionaries (prevents 0 vs 1 index swapping)
+        self.hand_states = {}           # label -> HandState
+        self.persistence_counters = {}  # label -> int
+
+        # Dual-hand 1€ filters for rock-solid stability
+        self.dual_dist_filter = OneEuroFilter(min_cutoff=1.2, beta=0.006)
+        self.dual_cx_filter   = OneEuroFilter(min_cutoff=1.5, beta=0.008)
+        self.dual_cy_filter   = OneEuroFilter(min_cutoff=1.5, beta=0.008)
+        self.dual_angle_filter = OneEuroFilter(min_cutoff=1.0, beta=0.005)
+
+        self.latest_jpeg = None
         self.last_frame_time = time.time()
         self.latest_state = {
             "hands": [],
+            "pinch_priority_hand": None,
             "two_hand_dist": 0.0,
             "dual_angle": 0.0,
             "dual_pinch": False,
@@ -204,6 +207,16 @@ class GestureEngine:
                     dead.add(client)
             self.connected_clients -= dead
 
+    async def generate_mjpeg(self):
+        """Asynchronous generator yielding live JPEG frames for in-browser HUD streaming."""
+        while self.running:
+            if self.latest_jpeg is not None:
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n" + self.latest_jpeg + b"\r\n"
+                )
+            await asyncio.sleep(0.033)  # ~30 fps browser preview
+
     @staticmethod
     def dist(p1, p2):
         return math.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2 + (p1.z - p2.z)**2)
@@ -230,7 +243,6 @@ class GestureEngine:
         return (v[0]/m, v[1]/m, v[2]/m) if m > 1e-9 else (0, 0, 0)
 
     def _joint_angle(self, a, b, c):
-        """Angle at joint B in degrees given 3D landmarks A, B, C."""
         v1 = self._sub(self._vec3(a), self._vec3(b))
         v2 = self._sub(self._vec3(c), self._vec3(b))
         dot = v1[0]*v2[0] + v1[1]*v2[1] + v1[2]*v2[2]
@@ -242,14 +254,13 @@ class GestureEngine:
         return math.degrees(math.acos(cos_ang))
 
     def _palm_euler(self, lms):
-        """Compute palm normal and return (pitch, yaw, roll) in radians."""
         wrist = self._vec3(lms[0])
         middle_mcp = self._vec3(lms[9])
         index_mcp = self._vec3(lms[5])
         pinky_mcp = self._vec3(lms[17])
 
-        v1 = self._sub(middle_mcp, wrist)          # wrist -> middle MCP
-        v2 = self._sub(pinky_mcp, index_mcp)       # index MCP -> pinky MCP
+        v1 = self._sub(middle_mcp, wrist)
+        v2 = self._sub(pinky_mcp, index_mcp)
         normal = self._norm(self._cross(v1, v2))
 
         nx, ny, nz = normal
@@ -274,14 +285,23 @@ class GestureEngine:
         global_bloom = False
         global_compress = False
 
-        detected_indices = set()
+        detected_labels = set()
 
         if res.hand_landmarks:
             for idx, lms in enumerate(res.hand_landmarks):
-                detected_indices.add(idx)
-                self.persistence_counters[idx] = 4  # Reset 4-frame persistence
+                # ── Handedness resolution ────────────────────────────────
+                label = "Right"
+                if res.handedness and idx < len(res.handedness):
+                    label = res.handedness[idx][0].category_name
 
-                # ── 21-point skeletal mesh rendering ──────────────────────
+                # Avoid collision if MediaPipe momentarily labels two hands with same name
+                if label in detected_labels:
+                    label = f"{label}_2"
+
+                detected_labels.add(label)
+                self.persistence_counters[label] = 4  # 4-frame persistence
+
+                # ── Draw 21-node skeletal mesh on frame for in-browser stream ──
                 for start_idx, end_idx in HAND_CONNECTIONS:
                     pt1 = (int(lms[start_idx].x * w), int(lms[start_idx].y * h))
                     pt2 = (int(lms[end_idx].x * w), int(lms[end_idx].y * h))
@@ -291,24 +311,19 @@ class GestureEngine:
                     pt = (int(lm.x * w), int(lm.y * h))
                     cv2.circle(frame, pt, 4, (0, 255, 255), -1, cv2.LINE_AA)
 
-                # ── Handedness label ─────────────────────────────────────
-                label = "Right"
-                if res.handedness and idx < len(res.handedness):
-                    label = res.handedness[idx][0].category_name
+                # Hand label indicator
+                wrist_pt = (int(lms[0].x * w), int(lms[0].y * h) + 20)
+                cv2.putText(frame, label.upper(), wrist_pt, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
 
-                # ── Raw telemetry ────────────────────────────────────────
+                # ── Kinematic metrics ────────────────────────────────────
                 raw_cx = (lms[0].x + lms[9].x) / 2.0
                 raw_cy = (lms[0].y + lms[9].y) / 2.0
-
-                # Knuckle length reference
                 knuckle_len = self.dist(lms[9], lms[0])
                 raw_depth = knuckle_len * 3.5
 
-                # Scale-invariant pinch ratio
                 tip_dist = self.dist(lms[4], lms[8])
                 pinch_ratio = tip_dist / knuckle_len if knuckle_len > 1e-6 else 1.0
 
-                # Knuckle angles for all 4 fingers
                 ang_index  = self._joint_angle(lms[5], lms[6], lms[8])
                 ang_middle = self._joint_angle(lms[9], lms[10], lms[12])
                 ang_ring   = self._joint_angle(lms[13], lms[14], lms[16])
@@ -316,30 +331,27 @@ class GestureEngine:
                 avg_angle = (ang_index + ang_middle + ang_ring + ang_pinky) / 4.0
 
                 is_open = avg_angle > 140.0
-
-                # ── 3D palm normal Euler angles ──────────────────────────
                 pitch, yaw, roll = self._palm_euler(lms)
 
-                # ── 1€ filtered state update ─────────────────────────────
-                if idx not in self.hand_states:
-                    self.hand_states[idx] = HandState(
+                # ── Handedness-keyed 1€ update ───────────────────────────
+                if label not in self.hand_states:
+                    self.hand_states[label] = HandState(
                         raw_cx, raw_cy, raw_depth, pinch_ratio,
                         label, is_open, avg_angle, now
                     )
-                    self.hand_states[idx].pitch = pitch
-                    self.hand_states[idx].yaw = yaw
-                    self.hand_states[idx].roll = roll
+                    self.hand_states[label].pitch = pitch
+                    self.hand_states[label].yaw = yaw
+                    self.hand_states[label].roll = roll
                 else:
-                    self.hand_states[idx].update(
+                    self.hand_states[label].update(
                         raw_cx, raw_cy, raw_depth, pinch_ratio,
                         label, is_open, avg_angle, dt, now,
                         pitch=pitch, yaw=yaw, roll=roll
                     )
 
-                sm = self.hand_states[idx]
+                sm = self.hand_states[label]
                 speed = math.sqrt(sm.vx**2 + sm.vy**2)
 
-                # Slap impulse trigger (open palm with high velocity)
                 if speed > 1.8 and is_open:
                     slap_active = True
                     slap_vx = sm.vx
@@ -350,19 +362,23 @@ class GestureEngine:
                 if sm.is_fist:
                     global_compress = True
 
-        # ── 4-frame temporal persistence ─────────────────────────────────
+        # ── 4-frame persistence cleanup ──────────────────────────────────
         all_tracked = list(self.hand_states.keys())
-        for idx in all_tracked:
-            if idx not in detected_indices:
-                cnt = self.persistence_counters.get(idx, 0) - 1
-                self.persistence_counters[idx] = cnt
+        for label in all_tracked:
+            if label not in detected_labels:
+                cnt = self.persistence_counters.get(label, 0) - 1
+                self.persistence_counters[label] = cnt
                 if cnt <= 0:
-                    del self.hand_states[idx]
-                    self.persistence_counters.pop(idx, None)
+                    del self.hand_states[label]
+                    self.persistence_counters.pop(label, None)
 
-        for idx, sm in self.hand_states.items():
+        # ── Multi-Hand Priority Arbitration ──────────────────────────────
+        pinching_hands = [sm for sm in self.hand_states.values() if sm.is_pinching]
+        pinch_priority_hand = pinching_hands[0].label if len(pinching_hands) == 1 else None
+
+        for label, sm in self.hand_states.items():
             hands_data.append({
-                "id": idx,
+                "id": label,
                 "label": sm.label,
                 "palm_x": sm.x,
                 "palm_y": sm.y,
@@ -384,20 +400,27 @@ class GestureEngine:
 
         if len(hands_data) == 2:
             p1, p2 = hands_data[0], hands_data[1]
-            dx = p2["palm_x"] - p1["palm_x"]
-            dy = p2["palm_y"] - p1["palm_y"]
-            two_hand_dist = math.sqrt(dx**2 + dy**2)
-            dual_angle = math.atan2(dy, dx)
+            raw_dx = p2["palm_x"] - p1["palm_x"]
+            raw_dy = p2["palm_y"] - p1["palm_y"]
+            raw_dist = math.sqrt(raw_dx**2 + raw_dy**2)
+            raw_angle = math.atan2(raw_dy, raw_dx)
+            raw_cx = (p1["palm_x"] + p2["palm_x"]) / 2.0
+            raw_cy = (p1["palm_y"] + p2["palm_y"]) / 2.0
+
+            # 1€ filtered dual metrics for rock-solid stability
+            two_hand_dist = self.dual_dist_filter(raw_dist, now)
+            dual_angle = self.dual_angle_filter(raw_angle, now)
+            dual_pinch_center = {
+                "x": self.dual_cx_filter(raw_cx, now),
+                "y": self.dual_cy_filter(raw_cy, now)
+            }
 
             if p1["is_pinching"] and p2["is_pinching"]:
                 dual_pinch = True
-                dual_pinch_center = {
-                    "x": (p1["palm_x"] + p2["palm_x"]) / 2.0,
-                    "y": (p1["palm_y"] + p2["palm_y"]) / 2.0
-                }
 
         self.latest_state = {
             "hands": hands_data,
+            "pinch_priority_hand": pinch_priority_hand,
             "two_hand_dist": two_hand_dist,
             "dual_angle": round(dual_angle, 4),
             "dual_pinch": dual_pinch,
@@ -406,6 +429,12 @@ class GestureEngine:
             "compress": global_compress,
             "slap_impulse": {"active": slap_active, "vx": slap_vx, "vy": slap_vy}
         }
+
+        # Encode live JPEG for in-browser streaming endpoint
+        ret, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 72])
+        if ret:
+            self.latest_jpeg = jpeg.tobytes()
+
         return frame
 
     def run_capture(self, loop):
@@ -418,6 +447,7 @@ class GestureEngine:
         cap.set(cv2.CAP_PROP_FPS, 60)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
+        # Headless capture loop (NO cv2.imshow / waitKey desktop pop-ups)
         while self.running and cap.isOpened():
             ret, frame = cap.read()
             if not ret:
@@ -425,13 +455,8 @@ class GestureEngine:
                 continue
 
             frame = cv2.flip(frame, 1)
-            processed = self.process_frame(frame)
-            cv2.imshow("PIPO Vision Sensor", processed)
+            self.process_frame(frame)
 
             asyncio.run_coroutine_threadsafe(self.broadcast(), loop)
 
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-
         cap.release()
-        cv2.destroyAllWindows()
