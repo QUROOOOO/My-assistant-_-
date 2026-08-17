@@ -308,13 +308,10 @@ function updateBlipFX(nowSec) {
         }
     } else if (blipMode === 'MATERIALIZE') {
         const progress = Math.min(elapsed / BLIP_DURATION, 1.0);
-        // Non-linear gravitational easing: easeOutCubic(t / 3.5)
         const ease = 1.0 - Math.pow(1.0 - progress, 3.0);
 
         for (let i = 0; i < DUST_PARTICLE_COUNT; i++) {
             const dp = dustParticles[i];
-
-            // Harmonic damped settling
             const spiralCurlX = Math.sin(elapsed * 3.5 + dp.seed) * (1.0 - progress) * 16.0;
             const spiralCurlY = Math.cos(elapsed * 3.5 + dp.seed) * (1.0 - progress) * 16.0;
 
@@ -331,7 +328,6 @@ function updateBlipFX(nowSec) {
         if (progress >= 1.0) {
             blipAnimationActive = false;
             fxCtx.clearRect(0, 0, width, height);
-            // Restore DOM and Canvas Visibility
             hudElement.classList.remove('disintegrated');
             canvas.classList.remove('disintegrated');
             settingsDrawer.classList.remove('disintegrated');
@@ -404,7 +400,6 @@ function updateAudioEnergy() {
         flareEnergies[k] *= 0.88;
     }
 
-    // Continuous acoustic confidence decay
     cAudio = Math.max(0.0, cAudio - 0.04);
 
     if (audioMode === 'off' || !analyser || !audioDataArray) {
@@ -439,7 +434,6 @@ function updateAudioEnergy() {
     prevRawAudio = rawEnergy;
     smoothAudio += (gatedEnergy - smoothAudio) * 0.14;
 
-    // High-Frequency Acoustic Transient Evaluation
     if (snapAnalyser && snapDataArray) {
         snapAnalyser.getByteFrequencyData(snapDataArray);
         let snapSum = 0;
@@ -451,7 +445,7 @@ function updateAudioEnergy() {
         prevSnapEnergy = highEnergy;
 
         if (dEnergyHigh > 0.035) {
-            cAudio = Math.min(1.0, (dEnergyHigh - 0.035) * 18.0 + 0.55);
+            cAudio = Math.min(1.0, (dEnergyHigh - 0.035) * 18.0 + 0.50);
         }
     }
 }
@@ -480,10 +474,10 @@ function connectWS() {
             }
 
             // ── MULTIMODAL SNAP FUSION TRIGGER ─────────────────────────────
-            // Condition A: Pure High-Confidence Vision (C_vision >= 0.82)
-            // Condition B: Fused Vision + Sound (C_vision >= 0.50 AND C_audio >= 0.55)
-            const conditionA = cVision >= 0.82 || data.event === 'SNAP' || data.snap;
-            const conditionB = cVision >= 0.50 && cAudio >= 0.55;
+            // Condition A: Pure Vision Snap (C_vision >= 0.62)
+            // Condition B: Fused Vision + Sound (C_vision >= 0.40 AND C_audio >= 0.50)
+            const conditionA = cVision >= 0.62 || data.event === 'SNAP' || data.snap;
+            const conditionB = cVision >= 0.40 && cAudio >= 0.50;
 
             if ((conditionA || conditionB) && (now - lastSnapTriggerTime) > 2.0) {
                 lastSnapTriggerTime = now;
@@ -538,8 +532,8 @@ function connectWS() {
                     const depthRatio = (grabHand.depth_scale || 1.0) / anchorGrabHand.depth;
                     targetScale = Math.min(Math.max(anchorGrabScale * depthRatio * 0.85, 0.35), 2.2);
                 }
-                // ── STATE 3: UNSTABLE PLASMA FIST COMPRESSION (0.40 * R0) ───
-                else if (data.state === 'COMPRESS' || data.compress || data.hands.some(h => h.is_fist)) {
+                // ── STATE 3: STATE-LATCHED FIST COMPRESSION (0.40 * R0) ─────
+                else if (data.state === 'COMPRESS' || data.compress || data.hands.some(h => h.is_fist || h.fist_latched)) {
                     gestureState = 'COMPRESS';
                     targetScale = 0.40;
                     const primary = data.hands[0];
@@ -561,7 +555,6 @@ function connectWS() {
                         targetRotX = (primary.palm_y - 0.5) * 2.8;
                     }
 
-                    // Open Palm Slap / Swipe Momentum
                     if (data.slap_impulse && data.slap_impulse.active) {
                         angularVelY += data.slap_impulse.vx * 0.16;
                         angularVelX += data.slap_impulse.vy * 0.16;
@@ -589,11 +582,45 @@ function connectWS() {
 connectWS();
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 6. TRUE 60 FPS WEBSOCKET BINARY LIVE FEED STREAM
+// 6. TRUE 60 FPS WEBSOCKET BINARY LIVE FEED & DRAGGABLE HUD
 // ═══════════════════════════════════════════════════════════════════════════
 let liveFeedWs = null;
 const cameraToggleBtn = document.getElementById('camera-feed-toggle');
 const closeSensorHudBtn = document.getElementById('close-sensor-hud');
+const sensorHudHeader = document.querySelector('.sensor-hud-header');
+
+// Draggable Sensor HUD Header Interaction
+let isDraggingHud = false, hudStartX, hudStartY, hudInitialLeft, hudInitialTop;
+
+if (sensorHudHeader) {
+    sensorHudHeader.addEventListener('mousedown', (e) => {
+        if (e.target.id === 'close-sensor-hud') return;
+        isDraggingHud = true;
+        hudStartX = e.clientX;
+        hudStartY = e.clientY;
+        const rect = sensorHud.getBoundingClientRect();
+        hudInitialLeft = rect.left;
+        hudInitialTop = rect.top;
+        sensorHud.style.bottom = 'auto';
+        sensorHud.style.right = 'auto';
+        sensorHud.style.left = `${hudInitialLeft}px`;
+        sensorHud.style.top = `${hudInitialTop}px`;
+    });
+
+    window.addEventListener('mousemove', (e) => {
+        if (!isDraggingHud || !sensorHud) return;
+        const dx = e.clientX - hudStartX;
+        const dy = e.clientY - hudStartY;
+        const newX = Math.max(10, Math.min(window.innerWidth - sensorHud.offsetWidth - 10, hudInitialLeft + dx));
+        const newY = Math.max(10, Math.min(window.innerHeight - sensorHud.offsetHeight - 10, hudInitialTop + dy));
+        sensorHud.style.left = `${newX}px`;
+        sensorHud.style.top = `${newY}px`;
+    });
+
+    window.addEventListener('mouseup', () => {
+        isDraggingHud = false;
+    });
+}
 
 function openSensorHud() {
     if (!sensorHud) return;

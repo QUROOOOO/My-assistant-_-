@@ -201,6 +201,12 @@ body, html {
     align-items: center;
     padding: 0.65rem 0.95rem;
     border-bottom: 1px solid var(--border);
+    cursor: grab;
+    user-select: none;
+}
+
+.sensor-hud-header:active {
+    cursor: grabbing;
 }
 
 .sensor-hud-title {
@@ -212,6 +218,7 @@ body, html {
     flex: 1;
     text-align: center;
     margin-left: 22px; /* Centers title counterbalancing close button */
+    pointer-events: none;
 }
 
 .sensor-hud-close {
