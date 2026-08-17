@@ -10,10 +10,15 @@ class GestureArbitrator:
     STATE_COMPRESS = "COMPRESS"
     STATE_BLOOM = "BLOOM"
     STATE_SWIPE = "SWIPE"
+    STATE_SNAP = "SNAP"
 
     # Scale-invariant geometric thresholds (normalized by L_ref)
     PINCH_ENTER_RATIO = 0.30
     PINCH_EXIT_RATIO = 0.42
+
+    SNAP_PRELOAD_MAX_DIST = 0.20   # Normalized distance thumb tip to middle tip
+    SNAP_RELEASE_MIN_VEL = 3.6     # dD/dt in s^-1
+    SNAP_COOLDOWN_SEC = 1.5        # Refractory period
 
     FIST_TIP_THRESHOLD = 1.15      # >= 3 fingertips < 1.15 * L_ref
     OPEN_TIP_THRESHOLD = 1.55      # all 4 fingertips > 1.55 * L_ref

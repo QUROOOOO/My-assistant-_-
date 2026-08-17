@@ -35,7 +35,7 @@ def ensure_model():
 
 
 # ---------------------------------------------------------------------------
-# Per-Hand Tracked State with Scale-Invariant Heuristics & 15-Frame Memory
+# Per-Hand Tracked State with Biomechanical Snap & 15-Frame Memory
 # ---------------------------------------------------------------------------
 class HandState:
     def __init__(self, raw_cx, raw_cy, raw_depth, raw_pinch, pinch_pos, label, is_open, is_fist, now):
@@ -66,18 +66,24 @@ class HandState:
         self.is_open = bool(is_open)
         self.is_fist = bool(is_fist)
 
-        # Bulletproof 15-Frame Memory for Fist-to-Bloom Sequencing
+        # 15-Frame Memory for Fist-to-Bloom Sequencing
         self.fist_history = collections.deque(maxlen=GestureArbitrator.FIST_MEMORY_FRAMES)
         self.fist_history.append(is_fist)
         self.bloom_triggered = False
+
+        # Biomechanical Snap Tracking (Thumb Tip vs Middle Tip)
+        self.snap_preload_start = 0.0
+        self.is_snap_preloaded = False
+        self.prev_snap_dist = 1.0
+        self.snap_triggered = False
 
         # 3D Palm Normal Euler angles
         self.pitch = 0.0
         self.yaw = 0.0
         self.roll = 0.0
 
-    def update(self, raw_cx, raw_cy, raw_depth, raw_pinch, pinch_pos, label, is_open, is_fist, dt, now,
-               pitch=0.0, yaw=0.0, roll=0.0):
+    def update(self, raw_cx, raw_cy, raw_depth, raw_pinch, pinch_pos, label, is_open, is_fist,
+               norm_thumb_middle_dist, dt, now, pitch=0.0, yaw=0.0, roll=0.0):
         # ── Zero-Drift Deadband Filtering (< 0.03) ──────────────────────
         raw_vx = (raw_cx - self.prev_raw_x) / max(dt, 0.001)
         raw_vy = (raw_cy - self.prev_raw_y) / max(dt, 0.001)
@@ -112,14 +118,31 @@ class HandState:
         self.bloom_triggered = False
         if self.is_open and (True in self.fist_history):
             self.bloom_triggered = True
-            self.fist_history.clear() # Prevent double-firing
+            self.fist_history.clear()
+
+        # ── Biomechanical Snap Detection (Thumb Tip to Middle Tip) ─────
+        self.snap_triggered = False
+        snap_dD_dt = (norm_thumb_middle_dist - self.prev_snap_dist) / max(dt, 0.001)
+        self.prev_snap_dist = norm_thumb_middle_dist
+
+        # Phase 1: Pre-load compression (< 0.20 held for 40ms - 120ms)
+        if norm_thumb_middle_dist < GestureArbitrator.SNAP_PRELOAD_MAX_DIST:
+            if not self.is_snap_preloaded:
+                self.snap_preload_start = now
+                self.is_snap_preloaded = True
+        else:
+            if self.is_snap_preloaded:
+                preload_duration = now - self.snap_preload_start
+                # Phase 2: High-Velocity Slip & Release (dD/dt > 3.6 s^-1 within 40-150ms)
+                if 0.035 <= preload_duration <= 0.250 and snap_dD_dt > GestureArbitrator.SNAP_RELEASE_MIN_VEL:
+                    self.snap_triggered = True
+                self.is_snap_preloaded = False
 
         self.label = str(label)
         self.pitch = float(pitch)
         self.yaw = float(yaw)
         self.roll = float(roll)
 
-        # Scale-Invariant Pinch Hysteresis (0.30 enter, 0.42 exit)
         if self.is_pinching:
             if self.pinch > GestureArbitrator.PINCH_EXIT_RATIO:
                 self.is_pinching = False
@@ -145,8 +168,8 @@ class GestureEngine:
         self.running = True
 
         # Handedness-keyed tracking dictionaries
-        self.hand_states = {}           # label -> HandState
-        self.persistence_counters = {}  # label -> int
+        self.hand_states = {}
+        self.persistence_counters = {}
 
         # Dual-hand 1€ filters
         self.dual_dist_filter = OneEuroFilter(min_cutoff=1.2, beta=0.006)
@@ -158,11 +181,13 @@ class GestureEngine:
         self.latest_jpeg = None
         self.stream_viewers = 0
         self._jpeg_lock = threading.Lock()
-        self._viewer_events = set()
         self._async_loop = None
 
-        # Dedicated Ingestion Thread Buffer (maxlen=1 prevents queue latency)
+        # Dedicated Ingestion Thread Buffer (maxlen=1)
         self._frame_buffer = collections.deque(maxlen=1)
+
+        # Global Snap Cooldown Refractory Timer
+        self.last_snap_time = 0.0
 
         self.last_frame_time = time.time()
         self.latest_state = {
@@ -175,6 +200,8 @@ class GestureEngine:
             "grab_hand": None,
             "bloom": False,
             "compress": False,
+            "snap": False,
+            "event": None,
             "slap_impulse": {"active": False, "vx": 0.0, "vy": 0.0}
         }
 
@@ -199,24 +226,12 @@ class GestureEngine:
                     dead.add(client)
             self.connected_clients -= dead
 
-    def _notify_stream_viewers(self):
-        for ev in list(self._viewer_events):
-            ev.set()
-
     async def generate_mjpeg_stream(self):
-        """Asynchronous non-blocking 60 FPS MJPEG streaming generator."""
+        """Asynchronous non-blocking 60 FPS MJPEG streaming generator with 16ms cadence."""
         self.stream_viewers += 1
-        ev = asyncio.Event()
-        self._viewer_events.add(ev)
         last_sent = None
         try:
             while self.running:
-                try:
-                    await asyncio.wait_for(ev.wait(), timeout=0.033)
-                    ev.clear()
-                except asyncio.TimeoutError:
-                    pass
-
                 jpeg_data = None
                 with self._jpeg_lock:
                     if self.latest_jpeg is not None and self.latest_jpeg is not last_sent:
@@ -227,10 +242,10 @@ class GestureEngine:
                         b"--frame\r\n"
                         b"Content-Type: image/jpeg\r\n\r\n" + jpeg_data + b"\r\n"
                     )
+                await asyncio.sleep(0.016)
         except (asyncio.CancelledError, GeneratorExit, Exception):
             pass
         finally:
-            self._viewer_events.discard(ev)
             self.stream_viewers = max(0, self.stream_viewers - 1)
 
     async def generate_mjpeg(self):
@@ -252,6 +267,7 @@ class GestureEngine:
         slap_vx, slap_vy = 0.0, 0.0
         global_bloom = False
         global_compress = False
+        global_snap = False
 
         detected_labels = set()
 
@@ -294,13 +310,18 @@ class GestureEngine:
                 safe_l_ref = max(l_ref, 1e-6)
                 raw_depth = safe_l_ref * 3.5
 
-                # Pinch Ratio: ||Thumb_Tip - Index_Tip|| / L_ref
+                # Pinch Metric: ||Thumb_Tip (4) - Index_Tip (8)|| / L_ref
                 thumb_tip = pts[4]
                 index_tip = pts[8]
                 tip_dist = float(np.linalg.norm(thumb_tip - index_tip))
                 pinch_ratio = tip_dist / safe_l_ref
                 pinch_center = (float((thumb_tip[0] + index_tip[0]) / 2.0),
                                 float((thumb_tip[1] + index_tip[1]) / 2.0))
+
+                # Snap Metric: ||Thumb_Tip (4) - Middle_Tip (12)|| / L_ref
+                middle_tip = pts[12]
+                thumb_middle_dist = float(np.linalg.norm(thumb_tip - middle_tip))
+                norm_thumb_middle = thumb_middle_dist / safe_l_ref
 
                 # 4 Fingertips: 8 (Index), 12 (Middle), 16 (Ring), 20 (Pinky)
                 four_tips = pts[[8, 12, 16, 20]]
@@ -324,7 +345,7 @@ class GestureEngine:
                 yaw   = float(math.atan2(normal[0], normal[2]))
                 roll  = float(math.atan2(v2[1], math.sqrt(v2[0]**2 + v2[2]**2)))
 
-                # ── Handedness-Keyed Update with Deadband ────────────────
+                # ── Handedness-Keyed Update with Deadband & Snap ─────────
                 if label not in self.hand_states:
                     self.hand_states[label] = HandState(
                         raw_cx, raw_cy, raw_depth, pinch_ratio, pinch_center,
@@ -336,7 +357,7 @@ class GestureEngine:
                 else:
                     self.hand_states[label].update(
                         raw_cx, raw_cy, raw_depth, pinch_ratio, pinch_center,
-                        label, is_open, is_fist, dt, now,
+                        label, is_open, is_fist, norm_thumb_middle, dt, now,
                         pitch=pitch, yaw=yaw, roll=roll
                     )
 
@@ -352,6 +373,11 @@ class GestureEngine:
                     global_bloom = True
                 if sm.is_fist:
                     global_compress = True
+
+                # Check Snap with Refractory Cooldown (1.5s)
+                if sm.snap_triggered and (now - self.last_snap_time) > GestureArbitrator.SNAP_COOLDOWN_SEC:
+                    global_snap = True
+                    self.last_snap_time = now
 
         # ── Persistence Cleanup ──────────────────────────────────────────
         all_tracked = list(self.hand_states.keys())
@@ -426,7 +452,11 @@ class GestureEngine:
 
         # Determine Dominant State
         state = GestureArbitrator.STATE_IDLE
-        if global_bloom:
+        event = None
+        if global_snap:
+            state = GestureArbitrator.STATE_SNAP
+            event = "SNAP"
+        elif global_bloom:
             state = GestureArbitrator.STATE_BLOOM
         elif dual_pinch:
             state = GestureArbitrator.STATE_DUAL_PINCH
@@ -442,6 +472,7 @@ class GestureEngine:
         self.latest_state = {
             "hands": hands_data,
             "state": state,
+            "event": event,
             "two_hand_dist": two_hand_dist,
             "dual_angle": round(dual_angle, 4),
             "dual_pinch": dual_pinch,
@@ -449,6 +480,7 @@ class GestureEngine:
             "grab_hand": grab_hand,
             "bloom": global_bloom,
             "compress": global_compress,
+            "snap": global_snap,
             "slap_impulse": {"active": slap_active, "vx": slap_vx, "vy": slap_vy}
         }
 
@@ -459,8 +491,6 @@ class GestureEngine:
             if ret:
                 with self._jpeg_lock:
                     self.latest_jpeg = jpeg.tobytes()
-                if self._async_loop and not self._async_loop.is_closed():
-                    self._async_loop.call_soon_threadsafe(self._notify_stream_viewers)
 
         return frame
 
