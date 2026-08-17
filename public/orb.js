@@ -16,11 +16,12 @@ window.addEventListener('resize', resize);
 resize();
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 1. PRISTINE SPHERE GEOMETRY (Golden Angle Fibonacci Lattice)
+// 1. PRISTINE SPHERE GEOMETRY & 3D BURST KINEMATICS
 // ═══════════════════════════════════════════════════════════════════════════
 const POINT_COUNT = 1400;
 const R0 = 230; // Constant base radius (px)
 const nodes = [];
+const burstParticles = [];
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5)); // ~2.399963 rad
 
 for (let i = 0; i < POINT_COUNT; i++) {
@@ -28,18 +29,42 @@ for (let i = 0; i < POINT_COUNT; i++) {
     const phi = Math.acos(Math.max(-1, Math.min(1, y)));
     const theta = GOLDEN_ANGLE * i;
 
+    const nx = Math.sin(phi) * Math.cos(theta);
+    const ny = Math.cos(phi);
+    const nz = Math.sin(phi) * Math.sin(theta);
+
     nodes.push({
         theta: theta,
         phi: phi,
-        nx: Math.sin(phi) * Math.cos(theta),
-        ny: Math.cos(phi),
-        nz: Math.sin(phi) * Math.sin(theta),
+        nx: nx,
+        ny: ny,
+        nz: nz,
         baseR: R0
+    });
+
+    // Randomized cosmic explosion vectors (reaching 2.5x - 3.5x viewport scale)
+    const speed = 820 + Math.sin(i * 12.3) * 380;
+    const chaosX = (Math.cos(i * 7.1)) * 0.25;
+    const chaosY = (Math.sin(i * 9.3)) * 0.25;
+    const chaosZ = (Math.cos(i * 11.7)) * 0.25;
+    const dir = { x: nx + chaosX, y: ny + chaosY, z: nz + chaosZ };
+    const dirLen = Math.sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z) || 1.0;
+
+    burstParticles.push({
+        vx: (dir.x / dirLen) * speed,
+        vy: (dir.y / dirLen) * speed,
+        vz: (dir.z / dirLen) * speed,
+        lambda: 0.38 + ((i % 17) / 17.0) * 0.18,
+        seed: i * 37
     });
 }
 
-// Ordered glyph density from background to high-contrast foreground
+// Standard ASCII density gradient
 const ASCII_CHARS = ['·', '.', ':', '+', 'x', '*', '%', '0', '#', '@'];
+// High-energy compressed plasma glyphs
+const PLASMA_CHARS = ['@', '#', '%', '&', '8'];
+// Cosmic supernova burst randomized glyphs
+const BURST_CHARS = ['*', '+', 'x', '·', ':', '°', '¤', '#', '░', '▒'];
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 2. ORB STATE & KINEMATICS
@@ -54,16 +79,22 @@ let targetScale = 1.0;
 
 // Gesture state machine
 let gestureState = 'IDLE'; // IDLE | HOVER | GRAB | DUAL_GRAB | COMPRESS | DUAL_MOLD | SLAP
-let lockedPinchHandId = null; // Handedness label of actively locked pinching hand
+let lockedPinchHandId = null;
 let anchorHand = { x: 0, y: 0, depth: 1.0 };
 let anchorOrbPos = { x: width / 2, y: height / 2 };
 let anchorScale = 1.0;
 let anchorDualDist = 0.0;
 
-// Bloom Shockwave Dynamics
-let bloomActive = false;
-let bloomStartTime = 0;
-const BLOOM_DURATION = 0.6; // seconds
+// Cosmic Supernova Burst & Reassembly Dynamics
+let burstActive = false;
+let burstStartTime = 0;
+const BURST_EXPAND_TIME = 1.9; // seconds of full expansion
+const REASSEMBLY_TIME = 1.4;   // seconds of gravitational reassembly
+const TOTAL_BLOOM_TIME = BURST_EXPAND_TIME + REASSEMBLY_TIME;
+
+// Idle-to-Hover deceleration timer
+let handEnterTime = 0;
+let hadHandsLastFrame = false;
 
 let currentTheme = 'dark';
 let sensitivity = 1.5;
@@ -72,7 +103,7 @@ let audioMode = 'both';
 let hasHands = false;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 3. AMPLIFIED ACOUSTIC NEAR-FIELD FILTERING & GATING
+// 3. AMPLIFIED ACOUSTIC NEAR-FIELD FILTERING (2.8x Boosted Gain)
 // ═══════════════════════════════════════════════════════════════════════════
 let audioCtx, analyser, biquadFilter, micSource;
 let audioDataArray;
@@ -123,19 +154,16 @@ function updateAudioEnergy() {
     }
     const rawEnergy = (sum / audioDataArray.length) / 255.0;
 
-    // Adaptive ambient noise floor tracking
     ambientNoiseFloor = ambientNoiseFloor * 0.993 + rawEnergy * 0.007;
 
-    // Responsive 1.4x SNR baseline gate
     let gatedEnergy = 0.0;
     const gateThreshold = ambientNoiseFloor * 1.4;
     if (rawEnergy > gateThreshold) {
-        // Boosted baseline sensitivity gain (4.32x)
-        gatedEnergy = Math.min((rawEnergy - gateThreshold) * sensitivity * 4.32, 1.0);
+        // Boosted baseline sensitivity gain (12.1x total multiplier)
+        gatedEnergy = Math.min((rawEnergy - gateThreshold) * sensitivity * 12.1, 1.0);
     }
 
-    // Low-pass audio smoothing
-    smoothAudio += (gatedEnergy - smoothAudio) * 0.10;
+    smoothAudio += (gatedEnergy - smoothAudio) * 0.12;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -154,20 +182,24 @@ function connectWS() {
             const data = JSON.parse(e.data);
             const handCount = data.hands ? data.hands.length : 0;
 
-            // Streamlined footer
             handsMeter.innerText = `${handCount} HAND${handCount === 1 ? '' : 'S'}`;
 
-            // Check Shockwave Bloom trigger from telemetry
+            // Trigger Supernova Cosmic Particle Burst
             if (data.bloom) {
-                bloomActive = true;
-                bloomStartTime = performance.now() / 1000;
+                burstActive = true;
+                burstStartTime = performance.now() / 1000;
             }
 
             if (handCount > 0) {
+                if (!hadHandsLastFrame) {
+                    handEnterTime = performance.now() / 1000;
+                }
+                hadHandsLastFrame = true;
                 hasHands = true;
+
                 const pinchingHands = data.hands.filter(h => h.is_pinching);
 
-                // ── CASE A: DUAL PINCH (Both hands pinching simultaneously) ──
+                // ── CASE A: DUAL PINCH (Both hands pinching) ────────────────
                 if (data.dual_pinch || pinchingHands.length >= 2) {
                     lockedPinchHandId = null;
                     if (gestureState !== 'DUAL_GRAB') {
@@ -199,7 +231,6 @@ function connectWS() {
                     }
 
                     if (activeGrabHand) {
-                        // Exclusive grab control: Suppress all other hands!
                         if (gestureState !== 'GRAB') {
                             gestureState = 'GRAB';
                             anchorHand = {
@@ -237,12 +268,12 @@ function connectWS() {
                     lockedPinchHandId = null;
                     const primary = data.hands[0];
 
-                    // State 3: Fist Compress
+                    // State 3: Unstable High-Energy Fist Compress
                     if (primary.is_fist || data.compress) {
                         gestureState = 'COMPRESS';
-                        targetScale = 0.70;
-                        targetRotY = (primary.palm_x - 0.5) * 1.5;
-                        targetRotX = (primary.palm_y - 0.5) * 1.5;
+                        targetScale = 0.62;
+                        targetRotY = (primary.palm_x - 0.5) * 1.4;
+                        targetRotX = (primary.palm_y - 0.5) * 1.4;
                     }
                     // State 1: Magnetic Hover
                     else if (primary.is_open) {
@@ -271,7 +302,7 @@ function connectWS() {
                     }
                 }
             } else {
-                // State: IDLE (No Hands)
+                hadHandsLastFrame = false;
                 hasHands = false;
                 lockedPinchHandId = null;
                 gestureState = 'IDLE';
@@ -297,13 +328,13 @@ function THREE_MAP(val, inMin, inMax, outMin, outMax) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 5. UI CONTROLS, FLOATING SENSOR HUD & GESTURE ACCORDION
+// 5. UI CONTROLS & FLOATING LIVE FEED HUD
 // ═══════════════════════════════════════════════════════════════════════════
 const settingsDrawer = document.getElementById('settings-drawer');
 document.getElementById('settings-btn').onclick = () => settingsDrawer.classList.add('open');
 document.getElementById('close-settings').onclick = () => settingsDrawer.classList.remove('open');
 
-// Floating In-App Sensor HUD Picture-in-Picture Toggle
+// Floating In-App Live Feed HUD Picture-in-Picture Toggle
 const cameraToggleBtn = document.getElementById('camera-feed-toggle');
 const sensorHud = document.getElementById('sensor-hud');
 const closeSensorHudBtn = document.getElementById('close-sensor-hud');
@@ -352,16 +383,7 @@ if (closeSensorHudBtn) {
     closeSensorHudBtn.addEventListener('click', closeSensorHud);
 }
 
-// Interactive Gesture Manual Accordion Toggle
-const gestureAccordion = document.getElementById('gesture-accordion');
-const gestureToggle = document.getElementById('gesture-toggle');
-if (gestureToggle && gestureAccordion) {
-    gestureToggle.addEventListener('click', () => {
-        gestureAccordion.classList.toggle('expanded');
-    });
-}
-
-// Segmented group synchronizer (.segmented-group > .segmented-btn)
+// Theme and audio mode segmented toggles
 document.querySelectorAll('.segmented-group').forEach(group => {
     const buttons = group.querySelectorAll('.segmented-btn');
     buttons.forEach(btn => {
@@ -390,12 +412,12 @@ document.getElementById('speed-slider').oninput = (e) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 6. HIGH-PERFORMANCE RENDER LOOP — Shockwaves & Damped Kinematics
+// 6. HIGH-PERFORMANCE RENDER LOOP — Cosmic Burst & Plasma Spikes
 // ═══════════════════════════════════════════════════════════════════════════
 let time = 0;
 const projectedNodes = new Array(POINT_COUNT);
 for (let i = 0; i < POINT_COUNT; i++) {
-    projectedNodes[i] = { x: 0, y: 0, z: 0, depth: 0, glyphIndex: 0 };
+    projectedNodes[i] = { x: 0, y: 0, z: 0, depth: 0, glyph: '·', alpha: 1.0 };
 }
 
 function render() {
@@ -405,7 +427,7 @@ function render() {
 
     updateAudioEnergy();
 
-    // Damped position & scale interpolation (heavy damping for dual-mold)
+    // Damped position & scale interpolation
     const isDualMold = gestureState === 'DUAL_MOLD';
     const springK = isDualMold ? 0.05 : 0.12;
 
@@ -413,9 +435,13 @@ function render() {
     orbCenter.y += (targetOrbCenter.y - orbCenter.y) * springK;
     currentScale += (targetScale - currentScale) * springK;
 
-    // IDLE: Slow continuous idle drift (0.002)
+    // Smooth Idle-to-Hover Deceleration: omega(t) = omega0 * exp(-t / 0.32)
     if (gestureState === 'IDLE') {
         targetRotY += 0.002 * speedMult;
+    } else if (gestureState === 'HOVER') {
+        const hoverElapsed = nowSec - handEnterTime;
+        const decayRot = 0.002 * Math.exp(-hoverElapsed / 0.32);
+        targetRotY += decayRot * speedMult;
     }
 
     // Smooth rotational kinematics
@@ -424,17 +450,41 @@ function render() {
     rotY += (targetRotY - rotY) * rotLerp + angularVelY;
     rotZ += (targetRotZ - rotZ) * rotLerp + angularVelZ;
 
-    // Viscous friction decay (0.95)
+    // Viscous friction decay
     angularVelX *= 0.95;
     angularVelY *= 0.95;
     angularVelZ *= 0.95;
 
-    // Shockwave Bloom elapsed time
-    let bloomProgress = 0.0;
-    if (bloomActive) {
-        bloomProgress = nowSec - bloomStartTime;
-        if (bloomProgress >= BLOOM_DURATION) {
-            bloomActive = false;
+    // ── Supernova Cosmic Burst & Gravitational Reassembly Calculation ────
+    let burstTotalElapsed = 0.0;
+    let inBurstPhase = false;
+    let inReassemblyPhase = false;
+    let reassemblyProgressFactor = 0.0; // 1.0 = peak explosion, 0.0 = equilibrium
+
+    if (burstActive) {
+        burstTotalElapsed = nowSec - burstStartTime;
+        if (burstTotalElapsed < BURST_EXPAND_TIME) {
+            inBurstPhase = true;
+        } else if (burstTotalElapsed < TOTAL_BLOOM_TIME) {
+            inReassemblyPhase = true;
+            const tRe = burstTotalElapsed - BURST_EXPAND_TIME;
+
+            // Phase 1 (0.0s – 0.6s): Slow initial inward drift (breaking momentum)
+            if (tRe < 0.6) {
+                reassemblyProgressFactor = 1.0 - 0.08 * (tRe / 0.6);
+            }
+            // Phase 2 (0.6s – 1.1s): Rapid non-linear acceleration toward core (a ~ 1/r^2)
+            else if (tRe < 1.1) {
+                const p = (tRe - 0.6) / 0.5;
+                reassemblyProgressFactor = 0.92 * (1.0 - Math.pow(p, 2.8));
+            }
+            // Phase 3 (1.1s – 1.4s): Elastic damped spring settling into equilibrium
+            else {
+                const p = (tRe - 1.1) / 0.3;
+                reassemblyProgressFactor = -0.12 * Math.sin(p * Math.PI * 2.5) * Math.exp(-6.0 * p);
+            }
+        } else {
+            burstActive = false;
         }
     }
 
@@ -446,39 +496,76 @@ function render() {
     const cosX = Math.cos(rotX), sinX = Math.sin(rotX);
     const cosZ = Math.cos(rotZ), sinZ = Math.sin(rotZ);
 
-    // Expanded dynamic bounds: [0.80 * R0, 1.30 * R0]
-    const minBound = 0.80 * R0;
-    const maxBound = 1.30 * R0;
     const isCompress = gestureState === 'COMPRESS';
+    const minBound = 0.60 * R0;
+    const maxBound = 1.40 * R0;
 
     for (let i = 0; i < POINT_COUNT; i++) {
         const node = nodes[i];
+        const bp = burstParticles[i];
 
-        // Amplified fluid surface-tension harmonics
-        const idleWave = 0.012 * Math.sin(2 * node.theta + 3 * node.phi + time);
-        const voiceWave = smoothAudio * 0.18 * Math.sin(4 * node.theta + 3 * node.phi + 2.5 * time);
-        let deltaR = R0 * (idleWave + voiceWave);
+        let px, py, pz;
+        let nodeAlpha = 1.0;
+        let glyphChar = '·';
 
-        // Fluid Shockwave Bloom: Delta_r = R0 * 0.35 * exp(-4t) * sin(8*PI*t - 4*phi)
-        if (bloomActive && bloomProgress < BLOOM_DURATION) {
-            const bloomDecay = Math.exp(-4.0 * bloomProgress);
-            const bloomWave = Math.sin(8.0 * Math.PI * bloomProgress - 4.0 * node.phi);
-            deltaR += R0 * 0.35 * bloomDecay * bloomWave;
+        if (inBurstPhase || inReassemblyPhase) {
+            // Cosmic Supernova Burst & Reassembly
+            const tPeak = BURST_EXPAND_TIME;
+            const peakDisplacementFactor = tPeak * Math.exp(-bp.lambda * tPeak);
+
+            const peakX = node.nx * R0 + bp.vx * peakDisplacementFactor;
+            const peakY = node.ny * R0 + bp.vy * peakDisplacementFactor;
+            const peakZ = node.nz * R0 + bp.vz * peakDisplacementFactor;
+
+            if (inBurstPhase) {
+                const tExp = burstTotalElapsed;
+                const disp = tExp * Math.exp(-bp.lambda * tExp);
+                px = node.nx * R0 + bp.vx * disp;
+                py = node.ny * R0 + bp.vy * disp;
+                pz = node.nz * R0 + bp.vz * disp;
+                nodeAlpha = Math.max(0.2, 1.0 - (tExp / BURST_EXPAND_TIME) * 0.4);
+            } else {
+                // Inward gravitational pull with inertia
+                const F = reassemblyProgressFactor;
+                px = (node.nx * R0) + (peakX - node.nx * R0) * F;
+                py = (node.ny * R0) + (peakY - node.ny * R0) * F;
+                pz = (node.nz * R0) + (peakZ - node.nz * R0) * F;
+                nodeAlpha = Math.min(1.0, 0.6 + (1.0 - Math.abs(F)) * 0.4);
+            }
+
+            // Dynamic glyph randomization during flight
+            const glyphSeed = Math.floor(bp.seed + time * 15 + i) % BURST_CHARS.length;
+            glyphChar = BURST_CHARS[glyphSeed];
+        } else {
+            // Fluid spherical surface acoustics & micro-ripples
+            const idleWave = 0.012 * Math.sin(2 * node.theta + 3 * node.phi + time);
+            const voiceWave = smoothAudio * 0.22 * Math.sin(4 * node.theta + 3 * node.phi + 2.5 * time);
+            let deltaR = R0 * (idleWave + voiceWave);
+
+            // Unstable high-energy plasma compression with energy spikes
+            if (isCompress) {
+                // Core contracts to 0.62 * R0 with +/- 3.5px micro-vibrations
+                const microVib = (Math.sin(time * 35 + i * 17) * 3.5);
+                // Procedural radial energy spikes: Delta_r = R0 * 0.35 * max(0, sin(12*theta + 8*phi + 24*t))^3
+                const spikeRaw = Math.sin(12 * node.theta + 8 * node.phi + 24 * time);
+                const spike = R0 * 0.35 * Math.pow(Math.max(0, spikeRaw), 3.0);
+
+                deltaR = -R0 * 0.38 + microVib + spike;
+            }
+
+            const clampedR = Math.max(minBound, Math.min(maxBound, R0 + deltaR));
+            const effectiveR = clampedR * currentScale;
+
+            px = node.nx * effectiveR;
+            py = node.ny * effectiveR;
+            pz = node.nz * effectiveR;
         }
 
-        // Strict radial boundary clamping
-        const clampedR = Math.max(minBound, Math.min(maxBound, R0 + deltaR));
-        const effectiveR = clampedR * currentScale;
-
-        const nx = node.nx * effectiveR;
-        const ny = node.ny * effectiveR;
-        const nz = node.nz * effectiveR;
-
         // 3D Euler Rotations (Y -> X -> Z)
-        const x1 = nx * cosY + nz * sinY;
-        const z1 = -nx * sinY + nz * cosY;
-        const y2 = ny * cosX - z1 * sinX;
-        const z2 = ny * sinX + z1 * cosX;
+        const x1 = px * cosY + pz * sinY;
+        const z1 = -px * sinY + pz * cosY;
+        const y2 = py * cosX - z1 * sinX;
+        const z2 = py * sinX + z1 * cosX;
         const x3 = x1 * cosZ - y2 * sinZ;
         const y3 = x1 * sinZ + y2 * cosZ;
 
@@ -489,21 +576,36 @@ function render() {
         const screenX = orbCenter.x + x3 * depth;
         const screenY = orbCenter.y + y3 * depth;
 
-        // Projected Z-depth character density (modulated if compressed)
-        const normalizedZ = (z2 + (R0 * currentScale)) / (2 * R0 * currentScale + 0.001);
-        const clampedZ = Math.max(0, Math.min(1, normalizedZ));
-        const densityMultiplier = isCompress ? 1.4 : 1.0;
-        const rawGlyphIdx = Math.min(
-            ASCII_CHARS.length - 1,
-            Math.floor(clampedZ * densityMultiplier * (ASCII_CHARS.length - 1))
-        );
+        // Select glyph density based on gesture state and depth
+        if (!inBurstPhase && !inReassemblyPhase) {
+            const normalizedZ = (z2 + (R0 * currentScale)) / (2 * R0 * currentScale + 0.001);
+            const clampedZ = Math.max(0, Math.min(1, normalizedZ));
+
+            if (isCompress) {
+                const plasmaIdx = Math.min(
+                    PLASMA_CHARS.length - 1,
+                    Math.floor(clampedZ * (PLASMA_CHARS.length - 1))
+                );
+                glyphChar = PLASMA_CHARS[plasmaIdx];
+            } else {
+                const rawGlyphIdx = Math.min(
+                    ASCII_CHARS.length - 1,
+                    Math.floor(clampedZ * (ASCII_CHARS.length - 1))
+                );
+                glyphChar = ASCII_CHARS[rawGlyphIdx];
+            }
+
+            const normalizedDepth = (z2 + (R0 * currentScale)) / (2 * R0 * currentScale + 0.001);
+            nodeAlpha = Math.min(Math.max(0.14 + normalizedDepth * 0.86, 0.14), 1.0);
+        }
 
         const p = projectedNodes[i];
         p.x = screenX;
         p.y = screenY;
         p.z = z2;
         p.depth = depth;
-        p.glyphIndex = rawGlyphIdx;
+        p.glyph = glyphChar;
+        p.alpha = nodeAlpha;
     }
 
     // Depth Sorting (Back-to-front)
@@ -513,18 +615,14 @@ function render() {
 
     for (let i = 0; i < POINT_COUNT; i++) {
         const p = projectedNodes[i];
-        const char = ASCII_CHARS[p.glyphIndex];
 
-        const fontSize = Math.max(7, Math.floor(16 * p.depth));
-        const normalizedDepth = (p.z + (R0 * currentScale)) / (2 * R0 * currentScale + 0.001);
-        const alpha = Math.min(Math.max(0.14 + normalizedDepth * 0.86, 0.14), 1.0);
-
+        const fontSize = Math.max(6, Math.floor(16 * p.depth));
         ctx.font = `${fontSize}px 'Plus Jakarta Sans', -apple-system, sans-serif`;
         ctx.fillStyle = isDark
-            ? `rgba(255, 255, 255, ${alpha.toFixed(2)})`
-            : `rgba(9, 9, 11, ${alpha.toFixed(2)})`;
+            ? `rgba(255, 255, 255, ${p.alpha.toFixed(2)})`
+            : `rgba(9, 9, 11, ${p.alpha.toFixed(2)})`;
 
-        ctx.fillText(char, p.x, p.y);
+        ctx.fillText(p.glyph, p.x, p.y);
     }
 }
 render();
