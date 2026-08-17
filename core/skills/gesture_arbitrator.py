@@ -1,7 +1,7 @@
 from typing import Dict, Any, List
 
 class GestureArbitrator:
-    """Arbitrates mutual exclusivity between gesture states and prevents multi-hand conflicts."""
+    """Arbitrates mutual exclusivity between gesture states with strict 2-phase bloom gating."""
 
     STATE_IDLE = "IDLE"
     STATE_HOVER = "HOVER"
@@ -10,10 +10,13 @@ class GestureArbitrator:
     STATE_BLOOM = "BLOOM"
     STATE_SLAP = "SLAP"
 
-    # Extension ratio thresholds
-    FIST_ENTER_THRESHOLD = 0.85
+    # Strict 2-phase Extension ratio thresholds
+    FIST_CHARGE_THRESHOLD = 0.72       # Must be < 0.72 + thumb tucked
+    FIST_CHARGE_MIN_FRAMES = 5         # At least 5 frames (~80ms)
     FIST_EXIT_THRESHOLD = 1.05
-    BLOOM_VELOCITY_THRESHOLD = 3.0 # dE/dt in s^-1
+    BLOOM_VELOCITY_THRESHOLD = 3.8     # dE/dt in s^-1 (explosive snap trigger)
+    SLOW_OPEN_VELOCITY_LIMIT = 2.0     # dE/dt in s^-1 (safe slow open reversion)
+
     PINCH_ENTER_RATIO = 0.20
     PINCH_EXIT_RATIO = 0.30
 

@@ -12,7 +12,7 @@ import mediapipe as mp
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision
 
-from core.skills.kinematics_validator import OneEuroFilter, KinematicsValidator
+from core.skills.kinematics_validator import OneEuroFilter
 from core.skills.gesture_arbitrator import GestureArbitrator
 
 MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
@@ -35,7 +35,7 @@ def ensure_model():
 
 
 # ---------------------------------------------------------------------------
-# Per-hand tracked state with Zero-Drift Deadband & Normalized Extension Ratio
+# Per-hand tracked state with Strict 2-Phase Bloom Gating & Zero-Drift Deadband
 # ---------------------------------------------------------------------------
 class HandState:
     def __init__(self, raw_cx, raw_cy, raw_depth, raw_pinch, pinch_pos, label, is_open, e_hand, now):
@@ -65,11 +65,14 @@ class HandState:
         self.label = str(label)
         self.is_open = bool(is_open)
 
-        # Normalized Knuckle-to-Fingertip Extension Ratio (E_hand)
+        # Strict 2-Phase Fist Charge & Bloom State
         self.e_hand = float(e_hand)
-        self.e_history = collections.deque(maxlen=10) # (time, e_hand) within ~130ms
+        self.e_history = collections.deque(maxlen=12) # (time, e_hand) within ~130ms
         self.e_history.append((now, e_hand))
-        self.is_fist = bool(e_hand < GestureArbitrator.FIST_ENTER_THRESHOLD)
+
+        self.fist_charge_counter = 0
+        self.fist_charged = False
+        self.is_fist = False
         self.bloom_triggered = False
 
         # 3D palm normal Euler angles
@@ -77,7 +80,7 @@ class HandState:
         self.yaw = 0.0
         self.roll = 0.0
 
-    def update(self, raw_cx, raw_cy, raw_depth, raw_pinch, pinch_pos, label, is_open, e_hand, dt, now,
+    def update(self, raw_cx, raw_cy, raw_depth, raw_pinch, pinch_pos, label, is_open, e_hand, thumb_tucked, dt, now,
                pitch=0.0, yaw=0.0, roll=0.0):
         # ── Zero-Drift Deadband Filtering on Stationary Hands (< 0.035) ──
         raw_vx = (raw_cx - self.prev_raw_x) / max(dt, 0.001)
@@ -85,7 +88,6 @@ class HandState:
         raw_speed = math.sqrt(raw_vx**2 + raw_vy**2)
 
         if raw_speed < 0.035:
-            # Stationary hold: freeze coordinate updates to eliminate landmark jitter
             self.vx = 0.0
             self.vy = 0.0
         else:
@@ -106,7 +108,7 @@ class HandState:
         self.pinch_x = float(self.filters["pinch_x"](pinch_pos[0], now))
         self.pinch_y = float(self.filters["pinch_y"](pinch_pos[1], now))
 
-        # ── Normalized Extension Ratio & Bloom Velocity (120ms window) ──
+        # ── Strict 2-Phase Bloom Sequence Gating ────────────────────────
         self.e_hand = float(e_hand)
         self.e_history.append((now, e_hand))
 
@@ -118,20 +120,31 @@ class HandState:
             dt_window = max(now - self.e_history[0][0], 0.001)
             dE_dt = (self.e_hand - self.e_history[0][1]) / dt_window
 
-        was_fist = self.is_fist
-        if self.is_fist:
-            if self.e_hand > GestureArbitrator.FIST_EXIT_THRESHOLD:
-                self.is_fist = False
-        else:
-            if self.e_hand < GestureArbitrator.FIST_ENTER_THRESHOLD:
+        # Phase 1: Charge Confirmation (E_hand < 0.72 AND thumb tucked for >= 5 frames)
+        if self.e_hand < GestureArbitrator.FIST_CHARGE_THRESHOLD and thumb_tucked:
+            self.fist_charge_counter += 1
+            if self.fist_charge_counter >= GestureArbitrator.FIST_CHARGE_MIN_FRAMES:
+                self.fist_charged = True
                 self.is_fist = True
+        else:
+            if not self.fist_charged:
+                self.fist_charge_counter = max(0, self.fist_charge_counter - 1)
+                self.is_fist = False
 
-        # Bloom Trigger
-        self.bloom_triggered = bool(
-            (was_fist or self.e_hand < 0.95) and
-            (dE_dt > GestureArbitrator.BLOOM_VELOCITY_THRESHOLD) and
-            (self.e_hand > 1.15)
-        )
+        # Phase 2: Explosive Snap Trigger vs Safe Slow-Open Reversion
+        self.bloom_triggered = False
+        if self.fist_charged:
+            # Explosive Snap Trigger
+            if dE_dt > GestureArbitrator.BLOOM_VELOCITY_THRESHOLD and self.e_hand > 1.15:
+                self.bloom_triggered = True
+                self.fist_charged = False
+                self.fist_charge_counter = 0
+                self.is_fist = False
+            # Safe Slow-Open Reversion
+            elif self.e_hand > GestureArbitrator.FIST_EXIT_THRESHOLD and dE_dt < GestureArbitrator.SLOW_OPEN_VELOCITY_LIMIT:
+                self.fist_charged = False
+                self.fist_charge_counter = 0
+                self.is_fist = False
 
         self.label = str(label)
         self.is_open = bool(is_open)
@@ -139,7 +152,6 @@ class HandState:
         self.yaw = float(yaw)
         self.roll = float(roll)
 
-        # Scale-invariant pinch hysteresis
         if self.is_pinching:
             if self.pinch > GestureArbitrator.PINCH_EXIT_RATIO:
                 self.is_pinching = False
@@ -168,7 +180,7 @@ class GestureEngine:
         self.hand_states = {}           # label -> HandState
         self.persistence_counters = {}  # label -> int
 
-        # Dual-hand 1€ filters for rock-solid pinch zoom
+        # Dual-hand 1€ filters
         self.dual_dist_filter = OneEuroFilter(min_cutoff=1.2, beta=0.006)
         self.dual_cx_filter   = OneEuroFilter(min_cutoff=1.5, beta=0.008)
         self.dual_cy_filter   = OneEuroFilter(min_cutoff=1.5, beta=0.008)
@@ -180,6 +192,9 @@ class GestureEngine:
         self._jpeg_lock = threading.Lock()
         self._viewer_events = set()
         self._async_loop = None
+
+        # Dedicated Ingestion Thread Buffer (maxlen=1 prevents queue lag)
+        self._frame_buffer = collections.deque(maxlen=1)
 
         self.last_frame_time = time.time()
         self.latest_state = {
@@ -198,7 +213,7 @@ class GestureEngine:
         self.connected_clients.add(ws)
         try:
             while True:
-                await asyncio.sleep(1)
+                await ws.receive_text()
         except Exception:
             pass
         finally:
@@ -283,33 +298,60 @@ class GestureEngine:
                 detected_labels.add(label)
                 self.persistence_counters[label] = 4
 
+                # ── Vectorized NumPy Landmark Array Conversion ───────────
+                pts = np.array([[lm.x, lm.y, lm.z] for lm in lms], dtype=np.float32)
+
                 # ── Render 21-node skeletal mesh on frame ────────────────
+                pts_2d = (pts[:, :2] * np.array([w, h], dtype=np.float32)).astype(np.int32)
                 for start_idx, end_idx in HAND_CONNECTIONS:
-                    pt1 = (int(lms[start_idx].x * w), int(lms[start_idx].y * h))
-                    pt2 = (int(lms[end_idx].x * w), int(lms[end_idx].y * h))
-                    cv2.line(frame, pt1, pt2, (255, 255, 0), 2, cv2.LINE_AA)
+                    cv2.line(frame, tuple(pts_2d[start_idx]), tuple(pts_2d[end_idx]), (255, 255, 0), 2, cv2.LINE_AA)
 
-                for lm in lms:
-                    pt = (int(lm.x * w), int(lm.y * h))
-                    cv2.circle(frame, pt, 4, (0, 255, 255), -1, cv2.LINE_AA)
+                for pt in pts_2d:
+                    cv2.circle(frame, tuple(pt), 4, (0, 255, 255), -1, cv2.LINE_AA)
 
-                wrist_pt = (int(lms[0].x * w), int(lms[0].y * h) + 20)
+                wrist_pt = (pts_2d[0][0], pts_2d[0][1] + 20)
                 cv2.putText(frame, label.upper(), wrist_pt, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
 
-                # ── Kinematic metrics via KinematicsValidator ────────────
-                raw_cx = (lms[0].x + lms[9].x) / 2.0
-                raw_cy = (lms[0].y + lms[9].y) / 2.0
+                # ── SIMD Vectorized Kinematic Metrics ────────────────────
+                wrist = pts[0]
+                middle_mcp = pts[9]
+                index_mcp = pts[5]
+                pinky_mcp = pts[17]
 
-                knuckle_ref = KinematicsValidator.dist_3d(lms[9], lms[0])
+                raw_cx = float((wrist[0] + middle_mcp[0]) / 2.0)
+                raw_cy = float((wrist[1] + middle_mcp[1]) / 2.0)
+
+                knuckle_ref = float(np.linalg.norm(middle_mcp - wrist))
                 raw_depth = knuckle_ref * 3.5
 
-                pinch_ratio = KinematicsValidator.calculate_pinch_ratio(lms[4], lms[8], knuckle_ref)
-                pinch_center = ((lms[4].x + lms[8].x) / 2.0, (lms[4].y + lms[8].y) / 2.0)
+                thumb_tip = pts[4]
+                index_tip = pts[8]
+                tip_dist = float(np.linalg.norm(thumb_tip - index_tip))
+                pinch_ratio = tip_dist / knuckle_ref if knuckle_ref > 1e-6 else 1.0
+                pinch_center = (float((thumb_tip[0] + index_tip[0]) / 2.0),
+                                float((thumb_tip[1] + index_tip[1]) / 2.0))
 
-                tips = [lms[8], lms[12], lms[16], lms[20]]
-                e_hand = KinematicsValidator.calculate_extension_ratio(lms[0], lms[9], tips)
+                # Tips: 8 (Index), 12 (Middle), 16 (Ring), 20 (Pinky)
+                four_tips = pts[[8, 12, 16, 20]]
+                dists_to_wrist = np.linalg.norm(four_tips - wrist, axis=1)
+                e_hand = float(np.sum(dists_to_wrist) / (4.0 * max(knuckle_ref, 1e-6)))
+
+                # Thumb tucked check: distance from thumb tip to wrist vs knuckle ref
+                thumb_wrist_dist = float(np.linalg.norm(thumb_tip - wrist))
+                thumb_tucked = bool(thumb_wrist_dist / max(knuckle_ref, 1e-6) < 0.92)
+
                 is_open = e_hand > 1.15
-                pitch, yaw, roll = KinematicsValidator.calculate_palm_euler(lms[0], lms[9], lms[5], lms[17])
+
+                # 3D Palm Euler Vectorization
+                v1 = middle_mcp - wrist
+                v2 = pinky_mcp - index_mcp
+                normal = np.cross(v1, v2)
+                norm_len = np.linalg.norm(normal)
+                normal = normal / norm_len if norm_len > 1e-9 else np.array([0.0, 0.0, 1.0], dtype=np.float32)
+
+                pitch = float(math.asin(max(-1.0, min(1.0, -normal[1]))))
+                yaw   = float(math.atan2(normal[0], normal[2]))
+                roll  = float(math.atan2(v2[1], math.sqrt(v2[0]**2 + v2[2]**2)))
 
                 # ── Handedness-keyed update with deadband filter ─────────
                 if label not in self.hand_states:
@@ -323,7 +365,7 @@ class GestureEngine:
                 else:
                     self.hand_states[label].update(
                         raw_cx, raw_cy, raw_depth, pinch_ratio, pinch_center,
-                        label, is_open, e_hand, dt, now,
+                        label, is_open, e_hand, thumb_tucked, dt, now,
                         pitch=pitch, yaw=yaw, roll=roll
                     )
 
@@ -364,13 +406,14 @@ class GestureEngine:
                 "is_pinching": sm.is_pinching,
                 "is_open": sm.is_open,
                 "is_fist": sm.is_fist,
+                "fist_charged": sm.fist_charged,
                 "e_hand": round(sm.e_hand, 3),
                 "pitch": round(sm.pitch, 4),
                 "yaw": round(sm.yaw, 4),
                 "roll": round(sm.roll, 4),
             })
 
-        # ── Dual-Hand Pinch Zoom & Scale (Keyed by Left & Right Pinches) ─
+        # ── Dual-Hand Pinch Zoom & Scale ─────────────────────────────────
         two_hand_dist = 0.0
         dual_angle = 0.0
         dual_pinch = False
@@ -456,28 +499,41 @@ class GestureEngine:
         cap = open_camera()
         consecutive_drops = 0
 
-        while self.running:
-            if not cap.isOpened():
-                time.sleep(0.5)
-                cap = open_camera()
-                continue
-
-            ret, frame = cap.read()
-            if not ret:
-                consecutive_drops += 1
-                if consecutive_drops >= 5:
-                    print("[PIPO Vision] Watchdog: 5 dropped frames. Recovering camera pipeline...")
-                    cap.release()
-                    time.sleep(0.2)
+        # Dedicated Background Ingestion Thread
+        def ingestion_worker():
+            nonlocal cap, consecutive_drops
+            while self.running:
+                if not cap.isOpened():
+                    time.sleep(0.5)
                     cap = open_camera()
-                    consecutive_drops = 0
-                time.sleep(0.005)
-                continue
+                    continue
 
-            consecutive_drops = 0
-            frame = cv2.flip(frame, 1)
-            self.process_frame(frame)
+                ret, raw_frame = cap.read()
+                if not ret:
+                    consecutive_drops += 1
+                    if consecutive_drops >= 5:
+                        print("[PIPO Vision] Watchdog: 5 dropped frames. Recovering camera pipeline...")
+                        cap.release()
+                        time.sleep(0.2)
+                        cap = open_camera()
+                        consecutive_drops = 0
+                    time.sleep(0.005)
+                    continue
 
-            asyncio.run_coroutine_threadsafe(self.broadcast(), loop)
+                consecutive_drops = 0
+                self._frame_buffer.append(raw_frame)
+
+        ingestion_thread = threading.Thread(target=ingestion_worker, daemon=True)
+        ingestion_thread.start()
+
+        # Processing Loop (reads latest frame from single-slot buffer)
+        while self.running:
+            if self._frame_buffer:
+                raw_frame = self._frame_buffer.pop()
+                flipped = cv2.flip(raw_frame, 1)
+                self.process_frame(flipped)
+                asyncio.run_coroutine_threadsafe(self.broadcast(), loop)
+            else:
+                time.sleep(0.002)
 
         cap.release()
