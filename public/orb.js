@@ -52,8 +52,9 @@ let angularVelX = 0, angularVelY = 0, angularVelZ = 0;
 let currentScale = 1.0;
 let targetScale = 1.0;
 
-// Gesture interaction state machine
-let gestureState = 'IDLE'; // IDLE | HOVER | GRAB | COMPRESS | DUAL_MOLD | SLAP
+// Gesture state machine
+let gestureState = 'IDLE'; // IDLE | HOVER | GRAB | DUAL_GRAB | COMPRESS | DUAL_MOLD | SLAP
+let lockedPinchHandId = null; // Handedness label of actively locked pinching hand
 let anchorHand = { x: 0, y: 0, depth: 1.0 };
 let anchorOrbPos = { x: width / 2, y: height / 2 };
 let anchorScale = 1.0;
@@ -81,8 +82,8 @@ let ambientNoiseFloor = 0.012;
 function initAudio() {
     if (audioCtx) return;
     try {
-        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-        audioCtx = new AudioContextClass();
+        const AC = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AC();
 
         // Extended vocal bandpass (180Hz – 4200Hz, Q = 0.65)
         biquadFilter = audioCtx.createBiquadFilter();
@@ -129,7 +130,7 @@ function updateAudioEnergy() {
     let gatedEnergy = 0.0;
     const gateThreshold = ambientNoiseFloor * 1.4;
     if (rawEnergy > gateThreshold) {
-        // Boosted baseline sensitivity gain (2.4 * 1.8 ~ 4.32x)
+        // Boosted baseline sensitivity gain (4.32x)
         gatedEnergy = Math.min((rawEnergy - gateThreshold) * sensitivity * 4.32, 1.0);
     }
 
@@ -138,7 +139,7 @@ function updateAudioEnergy() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 4. DEDICATED 5-STATE GESTURE RECOGNITION (WebSocket)
+// 4. MULTI-HAND CONFLICT ARBITRATION & 5-STATE GESTURE CLIENT
 // ═══════════════════════════════════════════════════════════════════════════
 function connectWS() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -164,81 +165,120 @@ function connectWS() {
 
             if (handCount > 0) {
                 hasHands = true;
-                const primary = data.hands[0];
 
-                // ── STATE 5: DUAL-HAND VOLUMETRIC MOLDING ───────────────
-                if (data.hands.length >= 2) {
-                    gestureState = 'DUAL_MOLD';
-                    if (data.dual_pinch) {
-                        targetOrbCenter.x = data.dual_pinch_center.x * width;
-                        targetOrbCenter.y = data.dual_pinch_center.y * height;
+                // Find pinching hands
+                const pinchingHands = data.hands.filter(h => h.is_pinching);
+
+                // ── CASE A: DUAL PINCH (Both hands pinching simultaneously) ──
+                if (data.dual_pinch || pinchingHands.length >= 2) {
+                    lockedPinchHandId = null;
+                    if (gestureState !== 'DUAL_GRAB') {
+                        gestureState = 'DUAL_GRAB';
+                        anchorDualDist = Math.max(data.two_hand_dist, 0.05);
+                        anchorOrbPos = { ...orbCenter };
+                        anchorScale = currentScale;
+                    }
+                    targetOrbCenter.x = data.dual_pinch_center.x * width;
+                    targetOrbCenter.y = data.dual_pinch_center.y * height;
+
+                    const distRatio = data.two_hand_dist / anchorDualDist;
+                    targetScale = Math.min(Math.max(anchorScale * distRatio, 0.35), 2.5);
+                }
+                // ── CASE B: PINCH PRIORITY LOCK (Single hand pinching) ──────
+                else if (pinchingHands.length === 1 || lockedPinchHandId !== null) {
+                    let activeGrabHand = null;
+
+                    // If a hand was already locked, check if it's still pinching
+                    if (lockedPinchHandId) {
+                        activeGrabHand = data.hands.find(h => h.id === lockedPinchHandId && h.is_pinching);
+                        if (!activeGrabHand) {
+                            lockedPinchHandId = null; // Hand released pinch
+                        }
                     }
 
-                    // Palm span scales sphere radius from 0.5x to 2.5x
+                    // Otherwise lock onto the newly pinching hand
+                    if (!activeGrabHand && pinchingHands.length > 0) {
+                        activeGrabHand = pinchingHands[0];
+                        lockedPinchHandId = activeGrabHand.id;
+                    }
+
+                    if (activeGrabHand) {
+                        // Exclusive grab control: Suppress all other hands!
+                        if (gestureState !== 'GRAB') {
+                            gestureState = 'GRAB';
+                            anchorHand = {
+                                x: activeGrabHand.palm_x,
+                                y: activeGrabHand.palm_y,
+                                depth: activeGrabHand.depth_scale || 1.0
+                            };
+                            anchorOrbPos = { ...orbCenter };
+                            anchorScale = currentScale;
+                        }
+
+                        const dx = (activeGrabHand.palm_x - anchorHand.x) * width * 1.3;
+                        const dy = (activeGrabHand.palm_y - anchorHand.y) * height * 1.3;
+                        targetOrbCenter.x = anchorOrbPos.x + dx;
+                        targetOrbCenter.y = anchorOrbPos.y + dy;
+
+                        const depthRatio = (activeGrabHand.depth_scale || 1.0) / anchorHand.depth;
+                        targetScale = Math.min(Math.max(anchorScale * depthRatio * 0.85, 0.35), 2.2);
+                    }
+                }
+                // ── CASE C: DUAL-HAND VOLUMETRIC MOLDING (2 open hands) ──────
+                else if (handCount >= 2) {
+                    lockedPinchHandId = null;
+                    gestureState = 'DUAL_MOLD';
+
+                    // Smooth volumetric scale from 1€ filtered distance
                     if (data.two_hand_dist > 0) {
                         targetScale = THREE_MAP(data.two_hand_dist, 0.12, 0.65, 0.5, 2.5);
                     }
-                    // Relative angle steers roll/yaw of 3D axis
                     if (data.dual_angle !== undefined) {
                         targetRotZ = data.dual_angle * 0.8;
                     }
                 }
-                // ── STATE 2: PHYSICAL LOCK & DRAG (Single Pinch) ────────
-                else if (primary.is_pinching) {
-                    if (gestureState !== 'GRAB') {
-                        gestureState = 'GRAB';
-                        anchorHand = {
-                            x: primary.palm_x,
-                            y: primary.palm_y,
-                            depth: primary.depth_scale || 1.0
-                        };
-                        anchorOrbPos = { ...orbCenter };
-                        anchorScale = currentScale;
-                    }
-                    const dx = (primary.palm_x - anchorHand.x) * width * 1.3;
-                    const dy = (primary.palm_y - anchorHand.y) * height * 1.3;
-                    targetOrbCenter.x = anchorOrbPos.x + dx;
-                    targetOrbCenter.y = anchorOrbPos.y + dy;
-
-                    const depthRatio = (primary.depth_scale || 1.0) / anchorHand.depth;
-                    targetScale = Math.min(Math.max(anchorScale * depthRatio * 0.85, 0.35), 2.2);
-                }
-                // ── STATE 3: FIST SQUEEZE & COMPRESS ────────────────────
-                else if (primary.is_fist || data.compress) {
-                    gestureState = 'COMPRESS';
-                    targetScale = 0.70; // Smoothly contract to 0.70x
-                    targetRotY = (primary.palm_x - 0.5) * 1.5;
-                    targetRotX = (primary.palm_y - 0.5) * 1.5;
-                }
-                // ── STATE 1: MAGNETIC HOVER (Single Open Palm) ──────────
-                else if (primary.is_open) {
-                    gestureState = 'HOVER';
-                    targetScale = primary.depth_scale || 1.0;
-
-                    // 1:1 orientation tracking with palm Euler angles
-                    if (primary.pitch !== undefined) {
-                        targetRotX = primary.pitch * 1.8;
-                        targetRotY = primary.yaw * 1.8;
-                        targetRotZ = primary.roll * 0.6;
-                    } else {
-                        targetRotY = (primary.palm_x - 0.5) * 3.0;
-                        targetRotX = (primary.palm_y - 0.5) * 3.0;
-                    }
-
-                    // ── STATE 4: OPEN PALM SLAP / FLICK ─────────────────
-                    if (data.slap_impulse && data.slap_impulse.active) {
-                        angularVelY += data.slap_impulse.vx * 0.16;
-                        angularVelX += data.slap_impulse.vy * 0.16;
-                    }
-                }
+                // ── CASE D: SINGLE HAND INTERACTIONS ────────────────────────
                 else {
-                    gestureState = 'HOVER';
-                    targetRotY = (primary.palm_x - 0.5) * 2.5;
-                    targetRotX = (primary.palm_y - 0.5) * 2.5;
+                    lockedPinchHandId = null;
+                    const primary = data.hands[0];
+
+                    // State 3: Fist Compress
+                    if (primary.is_fist || data.compress) {
+                        gestureState = 'COMPRESS';
+                        targetScale = 0.70;
+                        targetRotY = (primary.palm_x - 0.5) * 1.5;
+                        targetRotX = (primary.palm_y - 0.5) * 1.5;
+                    }
+                    // State 1: Magnetic Hover
+                    else if (primary.is_open) {
+                        gestureState = 'HOVER';
+                        targetScale = primary.depth_scale || 1.0;
+
+                        if (primary.pitch !== undefined) {
+                            targetRotX = primary.pitch * 1.8;
+                            targetRotY = primary.yaw * 1.8;
+                            targetRotZ = primary.roll * 0.6;
+                        } else {
+                            targetRotY = (primary.palm_x - 0.5) * 3.0;
+                            targetRotX = (primary.palm_y - 0.5) * 3.0;
+                        }
+
+                        // State 4: Open Palm Slap / Flick
+                        if (data.slap_impulse && data.slap_impulse.active) {
+                            angularVelY += data.slap_impulse.vx * 0.16;
+                            angularVelX += data.slap_impulse.vy * 0.16;
+                        }
+                    }
+                    else {
+                        gestureState = 'HOVER';
+                        targetRotY = (primary.palm_x - 0.5) * 2.5;
+                        targetRotX = (primary.palm_y - 0.5) * 2.5;
+                    }
                 }
             } else {
-                // ── STATE: IDLE (No Hands) ──────────────────────────────
+                // State: IDLE (No Hands)
                 hasHands = false;
+                lockedPinchHandId = null;
                 gestureState = 'IDLE';
                 targetScale = 1.0;
                 targetRotZ = 0.0;
@@ -262,11 +302,28 @@ function THREE_MAP(val, inMin, inMax, outMin, outMax) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 5. UI CONTROLS & INTERACTIVE GESTURE ACCORDION MANUAL
+// 5. UI CONTROLS, SENSOR STREAM TOGGLE & GESTURE ACCORDION
 // ═══════════════════════════════════════════════════════════════════════════
 const settingsDrawer = document.getElementById('settings-drawer');
 document.getElementById('settings-btn').onclick = () => settingsDrawer.classList.add('open');
 document.getElementById('close-settings').onclick = () => settingsDrawer.classList.remove('open');
+
+// In-Browser Sensor Stream Preview Toggle
+const sensorToggle = document.getElementById('sensor-toggle');
+const sensorPreviewBox = document.getElementById('sensor-preview-box');
+const sensorFeedImg = document.getElementById('sensor-feed-img');
+
+if (sensorToggle && sensorPreviewBox && sensorFeedImg) {
+    sensorToggle.addEventListener('change', () => {
+        if (sensorToggle.checked) {
+            sensorPreviewBox.classList.add('active');
+            sensorFeedImg.src = '/video_feed';
+        } else {
+            sensorPreviewBox.classList.remove('active');
+            sensorFeedImg.src = '';
+        }
+    });
+}
 
 // Interactive Gesture Manual Accordion Toggle
 const gestureAccordion = document.getElementById('gesture-accordion');
@@ -306,7 +363,7 @@ document.getElementById('speed-slider').oninput = (e) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 6. HIGH-PERFORMANCE RENDER LOOP — Shockwaves & Retuned Kinematics
+// 6. HIGH-PERFORMANCE RENDER LOOP — Shockwaves & Damped Kinematics
 // ═══════════════════════════════════════════════════════════════════════════
 let time = 0;
 const projectedNodes = new Array(POINT_COUNT);
@@ -321,8 +378,10 @@ function render() {
 
     updateAudioEnergy();
 
-    // Responsive spring-damper position & scale kinematics
-    const springK = 0.12;
+    // Damped position & scale interpolation (heavy damping for dual-mold)
+    const isDualMold = gestureState === 'DUAL_MOLD';
+    const springK = isDualMold ? 0.05 : 0.12;
+
     orbCenter.x += (targetOrbCenter.x - orbCenter.x) * springK;
     orbCenter.y += (targetOrbCenter.y - orbCenter.y) * springK;
     currentScale += (targetScale - currentScale) * springK;
@@ -332,19 +391,18 @@ function render() {
         targetRotY += 0.002 * speedMult;
     }
 
-    // Smoother Rotational Kinematics: Lerp rate reduced to 0.038 to eliminate abrupt snapping
-    const rotLerp = 0.038;
+    // Smooth rotational kinematics
+    const rotLerp = isDualMold ? 0.025 : 0.038;
     rotX += (targetRotX - rotX) * rotLerp + angularVelX;
     rotY += (targetRotY - rotY) * rotLerp + angularVelY;
     rotZ += (targetRotZ - rotZ) * rotLerp + angularVelZ;
 
-    // Graceful viscous friction decay (0.95)
+    // Viscous friction decay (0.95)
     angularVelX *= 0.95;
     angularVelY *= 0.95;
     angularVelZ *= 0.95;
 
-    // Compute Shockwave Bloom elapsed time
-    let bloomDelta = 0.0;
+    // Shockwave Bloom elapsed time
     let bloomProgress = 0.0;
     if (bloomActive) {
         bloomProgress = nowSec - bloomStartTime;

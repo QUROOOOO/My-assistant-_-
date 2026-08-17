@@ -73,6 +73,20 @@
             <input type="range" class="capsule-slider" id="speed-slider" min="0.2" max="2.5" step="0.1" value="1.0">
         </div>
 
+        <!-- Optional In-Browser Sensor Stream Toggle -->
+        <div class="settings-group">
+            <div class="toggle-row">
+                <label for="sensor-toggle">Sensor Feed Preview</label>
+                <label class="switch">
+                    <input type="checkbox" id="sensor-toggle">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            <div class="sensor-preview-box" id="sensor-preview-box">
+                <img id="sensor-feed-img" alt="Vision Sensor Preview" />
+            </div>
+        </div>
+
         <!-- Expandable Gesture Manual Accordion Card -->
         <div class="gesture-accordion" id="gesture-accordion">
             <button class="gesture-toggle" id="gesture-toggle" type="button">
@@ -83,26 +97,28 @@
                 <svg class="chevron-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
             </button>
             <div class="gesture-content">
-                <div class="gesture-cards">
-                    <div class="gesture-card">
-                        <div class="gesture-badge">HOVER</div>
-                        <div class="gesture-desc">Open palm to tilt & align 3D parallax</div>
-                    </div>
-                    <div class="gesture-card">
-                        <div class="gesture-badge">PINCH & DRAG</div>
-                        <div class="gesture-desc">Hold thumb + index to lock, move & zoom</div>
-                    </div>
-                    <div class="gesture-card">
-                        <div class="gesture-badge">FIST & BLOOM</div>
-                        <div class="gesture-desc">Clench to compress, snap open for shockwave</div>
-                    </div>
-                    <div class="gesture-card">
-                        <div class="gesture-badge">SLAP / FLICK</div>
-                        <div class="gesture-desc">Quick swipe to spin with viscous momentum</div>
-                    </div>
-                    <div class="gesture-card">
-                        <div class="gesture-badge">DUAL MOLD</div>
-                        <div class="gesture-desc">2 hands to scale volume & roll 3D axis</div>
+                <div class="gesture-manual-body">
+                    <div class="gesture-cards">
+                        <div class="gesture-card">
+                            <div class="gesture-badge">HOVER</div>
+                            <div class="gesture-desc">Open palm to tilt & align 3D parallax</div>
+                        </div>
+                        <div class="gesture-card">
+                            <div class="gesture-badge">PINCH & DRAG</div>
+                            <div class="gesture-desc">Hold thumb + index to lock, move & zoom</div>
+                        </div>
+                        <div class="gesture-card">
+                            <div class="gesture-badge">FIST & BLOOM</div>
+                            <div class="gesture-desc">Clench to compress, snap open for shockwave</div>
+                        </div>
+                        <div class="gesture-card">
+                            <div class="gesture-badge">SLAP / FLICK</div>
+                            <div class="gesture-desc">Quick swipe to spin with viscous momentum</div>
+                        </div>
+                        <div class="gesture-card">
+                            <div class="gesture-badge">DUAL MOLD</div>
+                            <div class="gesture-desc">2 hands to scale volume & roll 3D axis</div>
+                        </div>
                     </div>
                 </div>
             </div>
