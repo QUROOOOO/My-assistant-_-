@@ -313,14 +313,29 @@ function openSensorHud() {
     if (!sensorHud) return;
     sensorHud.classList.remove('hidden');
     if (cameraToggleBtn) cameraToggleBtn.classList.add('active');
-    if (sensorStreamImg) sensorStreamImg.src = '/video_feed';
+    if (sensorStreamImg) {
+        sensorStreamImg.src = '/video_feed?t=' + Date.now();
+    }
 }
 
 function closeSensorHud() {
     if (!sensorHud) return;
     sensorHud.classList.add('hidden');
     if (cameraToggleBtn) cameraToggleBtn.classList.remove('active');
-    if (sensorStreamImg) sensorStreamImg.src = '';
+    if (sensorStreamImg) {
+        sensorStreamImg.src = '';
+        sensorStreamImg.removeAttribute('src');
+    }
+}
+
+if (sensorStreamImg) {
+    sensorStreamImg.onerror = () => {
+        setTimeout(() => {
+            if (sensorHud && !sensorHud.classList.contains('hidden')) {
+                sensorStreamImg.src = '/video_feed?t=' + Date.now();
+            }
+        }, 1000);
+    };
 }
 
 if (cameraToggleBtn) {
