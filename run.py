@@ -34,7 +34,7 @@ async def websocket_endpoint(websocket: WebSocket):
 @app.get("/video_feed")
 async def video_feed():
     return StreamingResponse(
-        gesture_engine.generate_mjpeg(),
+        gesture_engine.generate_mjpeg_stream(),
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
 

@@ -207,7 +207,7 @@ class GestureEngine:
                     dead.add(client)
             self.connected_clients -= dead
 
-    async def generate_mjpeg(self):
+    async def generate_mjpeg_stream(self):
         """Asynchronous generator yielding live JPEG frames for in-browser HUD streaming."""
         while self.running:
             if self.latest_jpeg is not None:
@@ -216,6 +216,11 @@ class GestureEngine:
                     b"Content-Type: image/jpeg\r\n\r\n" + self.latest_jpeg + b"\r\n"
                 )
             await asyncio.sleep(0.033)  # ~30 fps browser preview
+
+    async def generate_mjpeg(self):
+        """Alias for generate_mjpeg_stream."""
+        async for chunk in self.generate_mjpeg_stream():
+            yield chunk
 
     @staticmethod
     def dist(p1, p2):
@@ -294,7 +299,6 @@ class GestureEngine:
                 if res.handedness and idx < len(res.handedness):
                     label = res.handedness[idx][0].category_name
 
-                # Avoid collision if MediaPipe momentarily labels two hands with same name
                 if label in detected_labels:
                     label = f"{label}_2"
 
@@ -311,7 +315,6 @@ class GestureEngine:
                     pt = (int(lm.x * w), int(lm.y * h))
                     cv2.circle(frame, pt, 4, (0, 255, 255), -1, cv2.LINE_AA)
 
-                # Hand label indicator
                 wrist_pt = (int(lms[0].x * w), int(lms[0].y * h) + 20)
                 cv2.putText(frame, label.upper(), wrist_pt, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
 
@@ -407,7 +410,6 @@ class GestureEngine:
             raw_cx = (p1["palm_x"] + p2["palm_x"]) / 2.0
             raw_cy = (p1["palm_y"] + p2["palm_y"]) / 2.0
 
-            # 1€ filtered dual metrics for rock-solid stability
             two_hand_dist = self.dual_dist_filter(raw_dist, now)
             dual_angle = self.dual_angle_filter(raw_angle, now)
             dual_pinch_center = {
@@ -430,8 +432,8 @@ class GestureEngine:
             "slap_impulse": {"active": slap_active, "vx": slap_vx, "vy": slap_vy}
         }
 
-        # Encode live JPEG for in-browser streaming endpoint
-        ret, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 72])
+        # Encode live JPEG for in-browser streaming endpoint (Quality: 80)
+        ret, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         if ret:
             self.latest_jpeg = jpeg.tobytes()
 
