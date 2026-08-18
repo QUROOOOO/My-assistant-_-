@@ -28,9 +28,9 @@
                         <rect x="15" y="37" width="18" height="3.5" rx="1.75" fill="currentColor"/>
                         <!-- Top Center Circular Sensor Node -->
                         <circle cx="24" cy="18.5" r="3.2" fill="currentColor"/>
-                        <!-- Bottom Left Droplet Node (Tapered upward, rounded base) -->
+                        <!-- Bottom Left Droplet Node -->
                         <path d="M19.5 24.5C19.5 24.5 16.5 27 16.5 28.5C16.5 29.8 17.6 30.8 19 30.8C20.4 30.8 21.5 29.8 21.5 28.5C21.5 27 19.5 24.5 19.5 24.5Z" fill="currentColor"/>
-                        <!-- Bottom Right Droplet Node (Tapered upward, rounded base) -->
+                        <!-- Bottom Right Droplet Node -->
                         <path d="M28.5 24.5C28.5 24.5 26.5 27 26.5 28.5C26.5 29.8 27.6 30.8 29 30.8C30.4 30.8 31.5 29.8 31.5 28.5C31.5 27 28.5 24.5 28.5 24.5Z" fill="currentColor"/>
                     </svg>
                 </button>
@@ -46,9 +46,17 @@
                 <span id="hands-meter">0 HANDS</span>
             </div>
         </footer>
+
+        <!-- Floating Gesture Manual FAB (Bottom-Right) -->
+        <button class="fab-btn" id="gesture-manual-toggle" title="Gesture Manual">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+            </svg>
+        </button>
     </div>
 
-    <!-- Floating Picture-in-Picture Live Feed HUD Window (Bottom-Left) -->
+    <!-- Floating Picture-in-Picture Live Feed HUD Window -->
     <div id="sensor-hud" class="sensor-hud hidden">
         <div class="sensor-hud-header">
             <span class="sensor-hud-title">LIVE FEED</span>
@@ -69,7 +77,7 @@
         </div>
 
         <div class="settings-group">
-            <label>Interface Palette</label>
+            <label>Feel</label>
             <div class="segmented-group">
                 <button class="segmented-btn active" data-theme="dark">Pure Black</button>
                 <button class="segmented-btn" data-theme="light">Pure White</button>
@@ -77,7 +85,7 @@
         </div>
 
         <div class="settings-group">
-            <label>Audio Reactivity Mode</label>
+            <label>Thump</label>
             <div class="segmented-group">
                 <button class="segmented-btn active" data-audio-mode="both">Full Reactivity</button>
                 <button class="segmented-btn" data-audio-mode="off">Static Matrix</button>
@@ -99,36 +107,64 @@
             </div>
             <input type="range" class="capsule-slider" id="speed-slider" min="0.2" max="2.5" step="0.1" value="1.0">
         </div>
+    </div>
 
-        <!-- Integrated Scrollable Gesture Manual Section -->
-        <div class="settings-manual-section">
-            <div class="manual-section-header">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
-                <span>GESTURE MANUAL</span>
+    <!-- 4-Card Slide-Up Gesture Manual Overlay -->
+    <div class="gesture-manual-overlay" id="gesture-manual-overlay">
+        <div class="manual-sheet">
+            <div class="manual-sheet-header">
+                <div class="manual-sheet-title-group">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+                    <span>GESTURE MANUAL</span>
+                </div>
+                <button class="close-btn" id="close-manual" title="Close">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
             </div>
-            <div class="gesture-cards">
-                <div class="manual-card snap-card">
-                    <span class="snap-label">SNAP</span>
+
+            <!-- 4 Portrait Cards Grid (Matching Reference) -->
+            <div class="manual-cards-grid">
+                <!-- Card 1: Hover & Zoom -->
+                <div class="portrait-card">
+                    <div class="portrait-card-icon">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"></path><path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"></path><path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"></path><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"></path></svg>
+                    </div>
+                    <div class="portrait-card-content">
+                        <span class="portrait-card-tag">PARALLAX & SCALE</span>
+                        <h4 class="portrait-card-title">HOVER & ZOOM</h4>
+                        <p class="portrait-card-desc">Open palm tilts 3D parallax & 2-hand pinch scales the orb</p>
+                    </div>
                 </div>
-                <div class="gesture-card">
-                    <div class="gesture-badge">HOVER</div>
-                    <div class="gesture-desc">Open palm stops auto-spin and tilts 3D parallax</div>
+
+                <!-- Card 2: Plasma Fist -->
+                <div class="portrait-card">
+                    <div class="portrait-card-icon">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="7"></circle><path d="M12 2v3"></path><path d="M12 19v3"></path><path d="M2 12h3"></path><path d="M19 12h3"></path></svg>
+                    </div>
+                    <div class="portrait-card-content">
+                        <span class="portrait-card-tag">ENERGY CONDENSE</span>
+                        <h4 class="portrait-card-title">PLASMA FIST</h4>
+                        <p class="portrait-card-desc">Gradually clench hand to condense into high-energy core</p>
+                    </div>
                 </div>
-                <div class="gesture-card">
-                    <div class="gesture-badge">PINCH & DRAG / DUAL ZOOM</div>
-                    <div class="gesture-desc">1 hand pinches to grab & move; 2 hands pinch to scale orb</div>
+
+                <!-- Card 3: Supernova -->
+                <div class="portrait-card">
+                    <div class="portrait-card-icon">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+                    </div>
+                    <div class="portrait-card-content">
+                        <span class="portrait-card-tag">COSMIC EXPLOSION</span>
+                        <h4 class="portrait-card-title">SUPERNOVA</h4>
+                        <p class="portrait-card-desc">Explosive release from fist bursts cosmic particle supernova</p>
+                    </div>
                 </div>
-                <div class="gesture-card">
-                    <div class="gesture-badge">FIST COMPRESS</div>
-                    <div class="gesture-desc">Clench fist to charge unstable plasma energy</div>
-                </div>
-                <div class="gesture-card">
-                    <div class="gesture-badge">SUPERNOVA BLOOM</div>
-                    <div class="gesture-desc">Snap fist open to trigger cosmic explosion</div>
-                </div>
-                <div class="gesture-card">
-                    <div class="gesture-badge">SLAP / SWIPE</div>
-                    <div class="gesture-desc">Swipe open palm to spin with momentum</div>
+
+                <!-- Card 4: SNAP (Centered Word Only) -->
+                <div class="portrait-card snap-portrait-card">
+                    <div class="snap-center-wrap">
+                        <span class="snap-hero-label">SNAP</span>
+                    </div>
                 </div>
             </div>
         </div>

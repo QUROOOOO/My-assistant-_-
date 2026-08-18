@@ -11,6 +11,14 @@ const sensorHud = document.getElementById('sensor-hud');
 const liveFeedCanvas = document.getElementById('live-feed-canvas');
 const liveFeedCtx = liveFeedCanvas ? liveFeedCanvas.getContext('2d') : null;
 
+const manualOverlay = document.getElementById('gesture-manual-overlay');
+const manualToggleBtn = document.getElementById('gesture-manual-toggle');
+const closeManualBtn = document.getElementById('close-manual');
+
+// Offscreen canvas for 50x50 3D Pixel Block Reintegration
+const offscreenCanvas = document.createElement('canvas');
+const offscreenCtx = offscreenCanvas.getContext('2d');
+
 let width, height, dpr;
 function resize() {
     dpr = window.devicePixelRatio || 1;
@@ -24,6 +32,10 @@ function resize() {
     fxCanvas.width = width * dpr;
     fxCanvas.height = height * dpr;
     fxCtx.scale(dpr, dpr);
+
+    offscreenCanvas.width = width * dpr;
+    offscreenCanvas.height = height * dpr;
+    offscreenCtx.scale(dpr, dpr);
 }
 window.addEventListener('resize', resize);
 resize();
@@ -63,7 +75,6 @@ for (let i = 0; i < POINT_COUNT; i++) {
     nodeTheta[i] = theta;
     nodePhi[i] = phi;
 
-    // 360° Omnidirectional Cosmic Dispersion (3.0x viewport scale)
     const speed = 950.0 + Math.sin(i * 13.7) * 450.0;
     const chaosX = Math.cos(i * 7.9) * 0.28;
     const chaosY = Math.sin(i * 11.3) * 0.28;
@@ -79,7 +90,7 @@ for (let i = 0; i < POINT_COUNT; i++) {
     burstSeed[i] = (i * 41) % 1000;
 }
 
-// 16 Localized Solar Flare Centroid Unit Vectors (Fibonacci distributed)
+// 16 Localized Solar Flare Centroid Unit Vectors
 const FLARE_COUNT = 16;
 const flareAx = new Float32Array(FLARE_COUNT);
 const flareAy = new Float32Array(FLARE_COUNT);
@@ -126,7 +137,7 @@ for (let a = 0; a <= 100; a++) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 2. ORB STATE & GENTLE CONTINUOUS MOTION KINEMATICS
+// 2. ORB STATE & CONTINUOUS PROPORTIONAL FLEXION MAPPING
 // ═══════════════════════════════════════════════════════════════════════════
 let orbCenter = { x: width / 2, y: height / 2 };
 let targetOrbCenter = { x: width / 2, y: height / 2 };
@@ -135,6 +146,11 @@ let targetRotX = 0, targetRotY = 0, targetRotZ = 0;
 let angularVelX = 0, angularVelY = 0, angularVelZ = 0;
 let currentScale = 1.0;
 let targetScale = 1.0;
+
+// Continuous Proportional Radius (1.2 open -> R0, 0.5 closed -> 0.35 * R0)
+let targetRadius = R0;
+let smoothRadius = R0;
+let currentFlexion = 1.4;
 
 let gestureState = 'IDLE'; // IDLE | HOVER | GRAB | DUAL_PINCH | COMPRESS | BLOOM | SWIPE | SNAP
 let anchorDualDist = 0.0;
@@ -146,8 +162,8 @@ let anchorGrabScale = 1.0;
 // Supernova Cosmic Burst & 3-Phase Gravitational Snap-Back
 let burstActive = false;
 let burstStartTime = 0;
-const BURST_EXPAND_TIME = 1.8; // seconds of full 360° dispersion
-const REASSEMBLY_TIME = 1.3;   // seconds of 3-phase gravitational reassembly
+const BURST_EXPAND_TIME = 1.8;
+const REASSEMBLY_TIME = 1.3;
 const TOTAL_BLOOM_TIME = BURST_EXPAND_TIME + REASSEMBLY_TIME;
 
 // Smooth Idle-to-Hover Deceleration Timer
@@ -161,14 +177,15 @@ let audioMode = 'both';
 let hasHands = false;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 3. 3.5-SECOND CINEMATIC DUST DISINTEGRATION & DETERMINISTIC REINTEGRATION
+// 3. 3.5s DUST DISINTEGRATION & 50x50 3D PIXEL BLOCK REINTEGRATION
 // ═══════════════════════════════════════════════════════════════════════════
 let isDisintegrated = false;
 let blipAnimationActive = false;
 let blipMode = 'DISINTEGRATE'; // 'DISINTEGRATE' | 'MATERIALIZE'
 let blipStartTime = 0;
-const BLIP_DURATION = 3.5; // 3.5 seconds cinematic duration
+const BLIP_DURATION = 3.5;
 
+// Dust Particles for Snap 1 (Disintegration)
 const DUST_PARTICLE_COUNT = 4000;
 const dustParticles = [];
 
@@ -176,7 +193,6 @@ for (let p = 0; p < DUST_PARTICLE_COUNT; p++) {
     dustParticles.push({
         x: 0, y: 0,
         x0: 0, y0: 0,
-        spawnX: 0, spawnY: 0,
         vx0: 0, vy0: 0,
         size: 1.0 + Math.random() * 2.0,
         alpha: 1.0,
@@ -187,16 +203,44 @@ for (let p = 0; p < DUST_PARTICLE_COUNT; p++) {
     });
 }
 
+// 50x50 Pixel Block Grid for Snap 2 (3D Flip Reintegration)
+const BLOCK_SIZE = 50;
+let pixelBlocks = [];
+
+function buildPixelBlockGrid() {
+    pixelBlocks = [];
+    const cols = Math.ceil(width / BLOCK_SIZE);
+    const rows = Math.ceil(height / BLOCK_SIZE);
+    const centerX = width / 2;
+    const centerY = height / 2;
+    const maxDist = Math.hypot(centerX, centerY) || 1.0;
+
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            const bx = c * BLOCK_SIZE;
+            const by = r * BLOCK_SIZE;
+            const dist = Math.hypot(bx + BLOCK_SIZE / 2 - centerX, by + BLOCK_SIZE / 2 - centerY);
+            // Center-out cascading stagger delay (up to 1.6s)
+            const staggerDelay = (dist / maxDist) * 1.6;
+            pixelBlocks.push({
+                x: bx,
+                y: by,
+                w: Math.min(BLOCK_SIZE, width - bx),
+                h: Math.min(BLOCK_SIZE, height - by),
+                delay: staggerDelay,
+                duration: 1.6
+            });
+        }
+    }
+}
+
 function collectUiAndOrbTargets() {
     const targets = [];
-
-    // 1,400 Orb Nodes
     for (let i = 0; i < POINT_COUNT; i++) {
         targets.push({ x: projX[i] || (width / 2), y: projY[i] || (height / 2) });
     }
 
-    // Visible DOM UI Elements
-    const uiSelectors = ['.brand', '.status-pill', '#camera-feed-toggle', '#settings-btn', '.minimal-pill'];
+    const uiSelectors = ['.brand', '.status-pill', '#camera-feed-toggle', '#settings-btn', '.minimal-pill', '#gesture-manual-toggle'];
     uiSelectors.forEach(sel => {
         const el = document.querySelector(sel);
         if (el) {
@@ -217,8 +261,26 @@ function collectUiAndOrbTargets() {
             y: orbCenter.y + (Math.random() - 0.5) * R0 * 2.2
         });
     }
-
     return targets;
+}
+
+function captureOffscreenSnapshot() {
+    offscreenCtx.clearRect(0, 0, width, height);
+
+    // Render static snapshot of ASCII Orb to offscreen canvas
+    offscreenCtx.textAlign = 'center';
+    offscreenCtx.textBaseline = 'middle';
+
+    const isDark = currentTheme === 'dark';
+    const colorCache = isDark ? DARK_COLOR_CACHE : LIGHT_COLOR_CACHE;
+
+    for (let j = 0; j < POINT_COUNT; j++) {
+        const i = renderOrder[j];
+        const fontSize = Math.max(6, Math.min(80, Math.floor(16 * projDepth[i])));
+        offscreenCtx.font = FONT_CACHE[fontSize] || FONT_CACHE[16];
+        offscreenCtx.fillStyle = colorCache[projAlphaIdx[i]];
+        offscreenCtx.fillText(projGlyph[i], projX[i], projY[i]);
+    }
 }
 
 function triggerSnapEffect() {
@@ -227,7 +289,7 @@ function triggerSnapEffect() {
     blipAnimationActive = true;
 
     if (!isDisintegrated) {
-        // ── 3.5s DISINTEGRATION ("THE BLIP") ───────────────────────────
+        // ── SNAP 1: 3.5s DUST DISINTEGRATION ────────────────────────────
         blipMode = 'DISINTEGRATE';
         const targets = collectUiAndOrbTargets();
 
@@ -238,36 +300,23 @@ function triggerSnapEffect() {
             dp.y0 = t.y;
             dp.x = t.x;
             dp.y = t.y;
-            // Upward-right wind force: V_x = 1.8 + rand(0, 2.2), V_y = -2.2 - rand(0, 2.0)
             dp.vx0 = 1.8 + Math.random() * 2.2;
             dp.vy0 = -2.2 - Math.random() * 2.0;
             dp.alpha = 0.95;
         }
 
-        // Fade DOM UI and primary canvas
         hudElement.classList.add('disintegrated');
         canvas.classList.add('disintegrated');
         settingsDrawer.classList.add('disintegrated');
         if (sensorHud) sensorHud.classList.add('disintegrated');
+        if (manualOverlay) manualOverlay.classList.add('disintegrated');
 
         isDisintegrated = true;
     } else {
-        // ── 3.5s DETERMINISTIC REVERSE MATERIALIZATION ─────────────────
+        // ── SNAP 2: 50x50 3D PIXEL BLOCK REINTEGRATION ─────────────────
         blipMode = 'MATERIALIZE';
-        const targets = collectUiAndOrbTargets();
-
-        for (let i = 0; i < DUST_PARTICLE_COUNT; i++) {
-            const dp = dustParticles[i];
-            const t = targets[i % targets.length];
-            dp.x0 = t.x;
-            dp.y0 = t.y;
-            // Spawn off-screen top-right corner
-            dp.spawnX = width + 40 + Math.random() * 320;
-            dp.spawnY = -40 - Math.random() * 320;
-            dp.x = dp.spawnX;
-            dp.y = dp.spawnY;
-            dp.alpha = 0.15;
-        }
+        buildPixelBlockGrid();
+        captureOffscreenSnapshot();
 
         isDisintegrated = false;
     }
@@ -291,7 +340,6 @@ function updateBlipFX(nowSec) {
             dp.x += (dp.vx0 * tScale + curlX) * 1.3;
             dp.y += (dp.vy0 * tScale + curlY) * 1.3;
 
-            // Continuous alpha fade: alpha(t) = max(0, 1 - t / 3.5)
             dp.alpha = Math.max(0.0, 1.0 - progress);
 
             if (dp.alpha > 0.01) {
@@ -307,31 +355,50 @@ function updateBlipFX(nowSec) {
             fxCtx.clearRect(0, 0, width, height);
         }
     } else if (blipMode === 'MATERIALIZE') {
-        const progress = Math.min(elapsed / BLIP_DURATION, 1.0);
-        const ease = 1.0 - Math.pow(1.0 - progress, 3.0);
+        // 90-Degree 3D Flip Reveal of 50x50 Pixel Blocks
+        let allCompleted = true;
 
-        for (let i = 0; i < DUST_PARTICLE_COUNT; i++) {
-            const dp = dustParticles[i];
-            const spiralCurlX = Math.sin(elapsed * 3.5 + dp.seed) * (1.0 - progress) * 16.0;
-            const spiralCurlY = Math.cos(elapsed * 3.5 + dp.seed) * (1.0 - progress) * 16.0;
+        for (let b = 0; b < pixelBlocks.length; b++) {
+            const block = pixelBlocks[b];
+            const blockElapsed = elapsed - block.delay;
 
-            dp.x = dp.spawnX + (dp.x0 - dp.spawnX) * ease + spiralCurlX;
-            dp.y = dp.spawnY + (dp.y0 - dp.spawnY) * ease + spiralCurlY;
-            dp.alpha = Math.min(1.0, progress * 1.15);
+            let angle = Math.PI / 2; // 90° invisible default
 
-            fxCtx.fillStyle = dp.colorType === 'silver'
-                ? `rgba(205, 195, 225, ${dp.alpha.toFixed(2)})`
-                : `rgba(120, 110, 140, ${(dp.alpha * 0.9).toFixed(2)})`;
-            fxCtx.fillRect(dp.x, dp.y, dp.size, dp.size);
+            if (blockElapsed > 0) {
+                const p = Math.min(1.0, blockElapsed / block.duration);
+                if (p < 1.0) allCompleted = false;
+                // easeOutCubic from 90° (PI/2) down to 0°
+                const ease = 1.0 - Math.pow(1.0 - p, 3.0);
+                angle = (Math.PI / 2) * (1.0 - ease);
+            } else {
+                allCompleted = false;
+            }
+
+            if (angle < (Math.PI / 2 - 0.001)) {
+                fxCtx.save();
+                const midX = block.x + block.w / 2;
+                const midY = block.y + block.h / 2;
+                fxCtx.translate(midX, midY);
+                fxCtx.scale(1, Math.cos(angle));
+
+                fxCtx.drawImage(
+                    offscreenCanvas,
+                    block.x * dpr, block.y * dpr, block.w * dpr, block.h * dpr,
+                    -block.w / 2, -block.h / 2, block.w, block.h
+                );
+                fxCtx.restore();
+            }
         }
 
-        if (progress >= 1.0) {
+        if (elapsed >= BLIP_DURATION || allCompleted) {
             blipAnimationActive = false;
             fxCtx.clearRect(0, 0, width, height);
+
             hudElement.classList.remove('disintegrated');
             canvas.classList.remove('disintegrated');
             settingsDrawer.classList.remove('disintegrated');
             if (sensorHud) sensorHud.classList.remove('disintegrated');
+            if (manualOverlay) manualOverlay.classList.remove('disintegrated');
         }
     }
 }
@@ -356,7 +423,6 @@ function initAudio() {
         const AC = window.AudioContext || window.webkitAudioContext;
         audioCtx = new AC();
 
-        // Vocal Bandpass Filter (180Hz – 4200Hz, Q = 0.65)
         biquadFilter = audioCtx.createBiquadFilter();
         biquadFilter.type = 'bandpass';
         biquadFilter.frequency.value = 2190;
@@ -367,7 +433,6 @@ function initAudio() {
         analyser.smoothingTimeConstant = 0.25;
         audioDataArray = new Uint8Array(analyser.frequencyBinCount);
 
-        // High-Frequency Acoustic Snap Transient Filter (fc = 2800 Hz, Q = 1.4)
         snapHighPassFilter = audioCtx.createBiquadFilter();
         snapHighPassFilter.type = 'highpass';
         snapHighPassFilter.frequency.value = 2800;
@@ -451,7 +516,7 @@ function updateAudioEnergy() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 5. REFINED GESTURE ARBITRATION & MULTIMODAL SNAP FUSION
+// 5. CONTINUOUS GESTURE TELEMETRY & SNAP ARBITRATION
 // ═══════════════════════════════════════════════════════════════════════════
 function connectWS() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -473,9 +538,22 @@ function connectWS() {
                 cVision = data.c_vision;
             }
 
+            // ── CONTINUOUS KNUCKLE FLEXION PROPORTIONAL MAPPING ───────────
+            if (data.flexion !== undefined && handCount > 0) {
+                currentFlexion = data.flexion;
+                // Map flexion: >= 1.20 -> R0 (factor 1.0), <= 0.50 -> 0.35 * R0 (factor 0.35)
+                let factor = 1.0;
+                if (currentFlexion <= 0.50) {
+                    factor = 0.35;
+                } else if (currentFlexion < 1.20) {
+                    factor = 0.35 + ((currentFlexion - 0.50) / (1.20 - 0.50)) * (1.0 - 0.35);
+                }
+                targetRadius = R0 * factor;
+            } else if (handCount === 0) {
+                targetRadius = R0;
+            }
+
             // ── MULTIMODAL SNAP FUSION TRIGGER ─────────────────────────────
-            // Condition A: Pure Vision Snap (C_vision >= 0.62)
-            // Condition B: Fused Vision + Sound (C_vision >= 0.40 AND C_audio >= 0.50)
             const conditionA = cVision >= 0.62 || data.event === 'SNAP' || data.snap;
             const conditionB = cVision >= 0.40 && cAudio >= 0.50;
 
@@ -532,10 +610,9 @@ function connectWS() {
                     const depthRatio = (grabHand.depth_scale || 1.0) / anchorGrabHand.depth;
                     targetScale = Math.min(Math.max(anchorGrabScale * depthRatio * 0.85, 0.35), 2.2);
                 }
-                // ── STATE 3: STATE-LATCHED FIST COMPRESSION (0.40 * R0) ─────
-                else if (data.state === 'COMPRESS' || data.compress || data.hands.some(h => h.is_fist || h.fist_latched)) {
+                // ── STATE 3: CONTINUOUS FIST CONDENSATION (COMPRESS) ────────
+                else if (data.state === 'COMPRESS' || data.compress || currentFlexion < 0.80) {
                     gestureState = 'COMPRESS';
-                    targetScale = 0.40;
                     const primary = data.hands[0];
                     targetRotY = (primary.palm_x - 0.5) * 1.3;
                     targetRotX = (primary.palm_y - 0.5) * 1.3;
@@ -582,14 +659,13 @@ function connectWS() {
 connectWS();
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 6. TRUE 60 FPS WEBSOCKET BINARY LIVE FEED & DRAGGABLE HUD
+// 6. TRUE 60 FPS BINARY LIVE FEED & DRAGGABLE HUD
 // ═══════════════════════════════════════════════════════════════════════════
 let liveFeedWs = null;
 const cameraToggleBtn = document.getElementById('camera-feed-toggle');
 const closeSensorHudBtn = document.getElementById('close-sensor-hud');
 const sensorHudHeader = document.querySelector('.sensor-hud-header');
 
-// Draggable Sensor HUD Header Interaction
 let isDraggingHud = false, hudStartX, hudStartY, hudInitialLeft, hudInitialTop;
 
 if (sensorHudHeader) {
@@ -640,9 +716,7 @@ function openSensorHud() {
                         liveFeedCtx.drawImage(bmp, 0, 0, 480, 270);
                     }
                     if (bmp.close) bmp.close();
-                } catch (e) {
-                    // Bitmap decode frame skip
-                }
+                } catch (e) {}
             }
         };
 
@@ -680,9 +754,23 @@ if (closeSensorHudBtn) {
     closeSensorHudBtn.addEventListener('click', closeSensorHud);
 }
 
+// Settings Drawer Controls
 document.getElementById('settings-btn').onclick = () => settingsDrawer.classList.add('open');
 document.getElementById('close-settings').onclick = () => settingsDrawer.classList.remove('open');
 
+// 4-Card Slide-Up Gesture Manual Controls
+if (manualToggleBtn) {
+    manualToggleBtn.onclick = () => {
+        if (manualOverlay) manualOverlay.classList.toggle('open');
+    };
+}
+if (closeManualBtn) {
+    closeManualBtn.onclick = () => {
+        if (manualOverlay) manualOverlay.classList.remove('open');
+    };
+}
+
+// Feel & Thump Segmented Buttons
 document.querySelectorAll('.segmented-group').forEach(group => {
     const buttons = group.querySelectorAll('.segmented-btn');
     buttons.forEach(btn => {
@@ -711,7 +799,7 @@ document.getElementById('speed-slider').oninput = (e) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 7. HIGH-PERFORMANCE RENDER LOOP WITH GENTLE CONTINUOUS DYNAMICS
+// 7. HIGH-PERFORMANCE RENDER LOOP WITH CONTINUOUS FLEXION PHYSICS
 // ═══════════════════════════════════════════════════════════════════════════
 let time = 0;
 
@@ -723,12 +811,15 @@ function render() {
     updateAudioEnergy();
     updateBlipFX(nowSec);
 
+    // Continuous Proportional Smooth Radius (0.15 easing)
+    smoothRadius += (targetRadius - smoothRadius) * 0.15;
+
     // Gentle Continuous Exponential Smoothing (0.038 - 0.050)
     orbCenter.x += (targetOrbCenter.x - orbCenter.x) * 0.045;
     orbCenter.y += (targetOrbCenter.y - orbCenter.y) * 0.045;
     currentScale += (targetScale - currentScale) * 0.038;
 
-    // Smooth Idle-to-Hover Deceleration
+    // Calm Slow Auto-Rotation (Maintains idle speed during fist clench)
     if (gestureState === 'IDLE') {
         targetRotY += 0.003 * speedMult;
     } else if (gestureState === 'HOVER') {
@@ -747,7 +838,7 @@ function render() {
     angularVelY *= 0.95;
     angularVelZ *= 0.95;
 
-    // Skip drawing primary orb if disintegrated into FX canvas
+    // Skip drawing primary canvas if fully disintegrated into FX canvas
     if (isDisintegrated && !blipAnimationActive) {
         ctx.clearRect(0, 0, width, height);
         return;
@@ -767,17 +858,12 @@ function render() {
             inReassemblyPhase = true;
             const tRe = burstTotalElapsed - BURST_EXPAND_TIME;
 
-            // Phase 1 (0.0s – 0.5s): Slow initial inward drift
             if (tRe < 0.5) {
                 reassemblyProgressFactor = 1.0 - 0.08 * (tRe / 0.5);
-            }
-            // Phase 2 (0.5s – 1.0s): Rapid gravitational acceleration
-            else if (tRe < 1.0) {
+            } else if (tRe < 1.0) {
                 const p = (tRe - 0.5) / 0.5;
                 reassemblyProgressFactor = 0.92 * (1.0 - Math.pow(p, 2.8));
-            }
-            // Phase 3 (1.0s – 1.3s): Elastic spring settling into R0
-            else {
+            } else {
                 const p = (tRe - 1.0) / 0.3;
                 reassemblyProgressFactor = -0.12 * Math.sin(p * Math.PI * 2.5) * Math.exp(-6.0 * p);
             }
@@ -794,10 +880,18 @@ function render() {
     const cosX = Math.cos(rotX), sinX = Math.sin(rotX);
     const cosZ = Math.cos(rotZ), sinZ = Math.sin(rotZ);
 
-    const isCompress = gestureState === 'COMPRESS';
-    const minBound = 0.38 * R0;
+    const minBound = 0.30 * R0;
     const maxBound = 1.50 * R0;
     const sigmaSq2 = 2.0 * (0.35 * 0.35);
+
+    // High-Energy Vibration Jitter only as hand tightly closes (< 0.60 * R0)
+    let jitterAmplitude = 0.0;
+    if (smoothRadius < 0.60 * R0) {
+        const clenchDepth = (0.60 * R0 - smoothRadius) / (0.25 * R0);
+        jitterAmplitude = Math.min(1.0, Math.max(0.0, clenchDepth)) * 2.5;
+    }
+
+    const compressionProgress = Math.max(0.0, Math.min(1.0, (R0 - smoothRadius) / (R0 * 0.65)));
 
     for (let i = 0; i < POINT_COUNT; i++) {
         const nx = nodeNx[i];
@@ -849,19 +943,20 @@ function render() {
                     flareSum += flareEnergies[k] * Math.exp(-distSq / sigmaSq2);
                 }
             }
-            let deltaR = R0 * (idleWave + flareSum * 0.35);
 
-            // Unstable Energy Ball (Fist Compression 0.40 * R0)
-            if (isCompress) {
-                const microVib = Math.sin(time * 90.0 + i * 23.0) * 2.0;
+            let deltaR = smoothRadius * (idleWave + flareSum * 0.35);
+
+            // High-Frequency Vibration (45Hz) during tight fist condensation
+            if (jitterAmplitude > 0.05) {
+                const microVib = Math.sin(time * 90.0 + i * 23.0) * jitterAmplitude;
                 const arc1 = Math.sin(18.0 * theta + 14.0 * phi + 35.0 * time);
                 const arc2 = Math.cos(22.0 * theta - 16.0 * phi + 28.0 * time);
-                const plasmaArc = (Math.max(0.0, arc1) * Math.max(0.0, arc2)) * R0 * 0.30;
+                const plasmaArc = (Math.max(0.0, arc1) * Math.max(0.0, arc2)) * smoothRadius * 0.20 * (jitterAmplitude / 2.5);
 
-                deltaR = -R0 * 0.60 + microVib + plasmaArc;
+                deltaR += microVib + plasmaArc;
             }
 
-            const clampedR = Math.max(minBound, Math.min(maxBound, R0 + deltaR));
+            const clampedR = Math.max(minBound, Math.min(maxBound, smoothRadius + deltaR));
             const effectiveR = clampedR * currentScale;
 
             px = nx * effectiveR;
@@ -885,16 +980,17 @@ function render() {
         const screenY = orbCenter.y + y3 * depth;
 
         if (!inBurstPhase && !inReassemblyPhase) {
-            const normalizedZ = (z2 + (R0 * currentScale)) / (2 * R0 * currentScale + 0.001);
+            const normalizedZ = (z2 + (smoothRadius * currentScale)) / (2 * smoothRadius * currentScale + 0.001);
             const clampedZ = Math.max(0, Math.min(1, normalizedZ));
 
-            if (isCompress) {
+            // Proportional glyph shifting from ASCII dots to high-energy plasma characters
+            if (compressionProgress > 0.40) {
                 const plasmaIdx = Math.min(
                     PLASMA_CHARS.length - 1,
                     Math.floor(clampedZ * (PLASMA_CHARS.length - 1))
                 );
                 glyphChar = PLASMA_CHARS[plasmaIdx];
-                nodeAlpha = 1.0;
+                nodeAlpha = Math.min(1.0, 0.75 + compressionProgress * 0.25);
             } else {
                 const rawGlyphIdx = Math.min(
                     ASCII_CHARS.length - 1,
@@ -920,11 +1016,9 @@ function render() {
 
     for (let j = 0; j < POINT_COUNT; j++) {
         const i = renderOrder[j];
-
         const fontSize = Math.max(6, Math.min(80, Math.floor(16 * projDepth[i])));
         ctx.font = FONT_CACHE[fontSize] || FONT_CACHE[16];
         ctx.fillStyle = colorCache[projAlphaIdx[i]];
-
         ctx.fillText(projGlyph[i], projX[i], projY[i]);
     }
 }
