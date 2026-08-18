@@ -109,7 +109,7 @@
         </div>
     </div>
 
-    <!-- 4-Card Slide-Up Gesture Manual Overlay -->
+    <!-- Slide-Up Gesture Manual Overlay (Horizontal Scroll) -->
     <div class="gesture-manual-overlay" id="gesture-manual-overlay">
         <div class="manual-sheet">
             <div class="manual-sheet-header">
@@ -122,49 +122,48 @@
                 </button>
             </div>
 
-            <!-- 4 Portrait Cards Grid (Matching Reference) -->
-            <div class="manual-cards-grid">
-                <!-- Card 1: Hover & Zoom -->
-                <div class="portrait-card">
-                    <div class="portrait-card-icon">
-                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"></path><path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"></path><path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"></path><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"></path></svg>
-                    </div>
-                    <div class="portrait-card-content">
-                        <span class="portrait-card-tag">PARALLAX & SCALE</span>
-                        <h4 class="portrait-card-title">HOVER & ZOOM</h4>
-                        <p class="portrait-card-desc">Open palm tilts 3D parallax & 2-hand pinch scales the orb</p>
-                    </div>
+            <!-- Horizontal Scroll Container with Portrait Tiles -->
+            <div class="manual-scroll-container">
+                <!-- Tile 1: Hover -->
+                <div class="gesture-tile">
+                    <span class="tile-tag">3D PARALLAX</span>
+                    <h4 class="tile-title">HOVER</h4>
+                    <p class="tile-desc">Open palm tilts the orb in 3D space with magnetic parallax tracking</p>
                 </div>
 
-                <!-- Card 2: Plasma Fist -->
-                <div class="portrait-card">
-                    <div class="portrait-card-icon">
-                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="7"></circle><path d="M12 2v3"></path><path d="M12 19v3"></path><path d="M2 12h3"></path><path d="M19 12h3"></path></svg>
-                    </div>
-                    <div class="portrait-card-content">
-                        <span class="portrait-card-tag">ENERGY CONDENSE</span>
-                        <h4 class="portrait-card-title">PLASMA FIST</h4>
-                        <p class="portrait-card-desc">Gradually clench hand to condense into high-energy core</p>
-                    </div>
+                <!-- Tile 2: Pinch Zoom -->
+                <div class="gesture-tile">
+                    <span class="tile-tag">DUAL HAND</span>
+                    <h4 class="tile-title">PINCH ZOOM</h4>
+                    <p class="tile-desc">Two-hand pinch scales the orb up and down with proportional depth</p>
                 </div>
 
-                <!-- Card 3: Supernova -->
-                <div class="portrait-card">
-                    <div class="portrait-card-icon">
-                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-                    </div>
-                    <div class="portrait-card-content">
-                        <span class="portrait-card-tag">COSMIC EXPLOSION</span>
-                        <h4 class="portrait-card-title">SUPERNOVA</h4>
-                        <p class="portrait-card-desc">Explosive release from fist bursts cosmic particle supernova</p>
-                    </div>
+                <!-- Tile 3: Plasma Fist -->
+                <div class="gesture-tile">
+                    <span class="tile-tag">ENERGY CONDENSE</span>
+                    <h4 class="tile-title">PLASMA FIST</h4>
+                    <p class="tile-desc">Gradually clench hand to condense into a vibrating high-energy core</p>
                 </div>
 
-                <!-- Card 4: SNAP (Centered Word Only) -->
-                <div class="portrait-card snap-portrait-card">
-                    <div class="snap-center-wrap">
-                        <span class="snap-hero-label">SNAP</span>
-                    </div>
+                <!-- Tile 4: Supernova Bloom -->
+                <div class="gesture-tile">
+                    <span class="tile-tag">COSMIC EXPLOSION</span>
+                    <h4 class="tile-title">SUPERNOVA</h4>
+                    <p class="tile-desc">Explosive release from fist triggers an omnidirectional particle burst</p>
+                </div>
+
+                <!-- Tile 5: Snap -->
+                <div class="gesture-tile">
+                    <span class="tile-tag">THANOS EFFECT</span>
+                    <h4 class="tile-title">SNAP</h4>
+                    <p class="tile-desc">Snap fingers for cascading dust disintegration and 3D block reassembly</p>
+                </div>
+
+                <!-- Tile 6: Swipe -->
+                <div class="gesture-tile">
+                    <span class="tile-tag">KINETIC IMPULSE</span>
+                    <h4 class="tile-title">SWIPE</h4>
+                    <p class="tile-desc">Fast open-hand swipe applies angular momentum to the orb rotation</p>
                 </div>
             </div>
         </div>

@@ -1,7 +1,7 @@
 from typing import Dict, Any, List
 
 class GestureArbitrator:
-    """Arbitrates mutual exclusivity between gesture states with continuous flexion and biomechanical isolation."""
+    """Arbitrates mutual exclusivity between gesture states with Post-Pose Delta snap detection."""
 
     STATE_IDLE = "IDLE"
     STATE_HOVER = "HOVER"
@@ -16,17 +16,22 @@ class GestureArbitrator:
     PINCH_ENTER_RATIO = 0.30
     PINCH_EXIT_RATIO = 0.42
 
-    # Continuous Knuckle Extension Thresholds
-    FIST_TIGHT_THRESHOLD = 0.50     # E_avg <= 0.50 (tight fist)
+    # Fist Recognition: all 4 fingertips < 1.1 * L_ref from wrist
+    FIST_FINGERTIP_THRESHOLD = 1.10
+    FIST_TIGHT_THRESHOLD = 0.50     # E_avg <= 0.50 (tight fist for bloom gating)
     FIST_OPEN_THRESHOLD = 1.20      # E_avg >= 1.20 (open hand)
-    BLOOM_EXP_VELOCITY = 3.8        # dE/dt > 3.8 s^-1 explosive burst
 
-    # Biomechanical Snap Tracking & Isolation
-    SNAP_PRIMED_MAX_DIST = 0.28     # Thumb & Middle tip distance < 0.28 * L_ref
-    SNAP_FINGER_EXT_THRESHOLD = 1.0 # Ring (16) and Pinky (20) must be > 1.0 * L_ref
-    SNAP_DOWNWARD_DELTA_Y = 0.06    # Delta Y slip > 0.06 within 160ms
-    SNAP_VISION_CONF_THRESHOLD = 0.62
-    SNAP_COOLDOWN_SEC = 2.0         # Refractory period
+    # Bloom Trigger: fist held > 200ms, then all fingers > 1.6 * L_ref within 150ms
+    BLOOM_FIST_HOLD_MS = 0.200      # 200ms minimum fist hold
+    BLOOM_OPEN_THRESHOLD = 1.60     # All fingers must extend beyond 1.6 * L_ref
+    BLOOM_OPEN_WINDOW_MS = 0.150    # Must open within 150ms
+
+    # Post-Pose Delta State Matching Snap Detection
+    SNAP_PREPOSE_THUMB_MIDDLE = 0.25   # Pre-Pose: ||P4 - P12|| / L_ref < 0.25
+    SNAP_POSTPOSE_THUMB_INDEX = 0.30   # Post-Pose: ||P4 - P5|| / L_ref < 0.30
+    SNAP_POSTPOSE_MIDDLE_PALM = 0.80   # Post-Pose: ||P12 - P0|| / L_ref < 0.80
+    SNAP_TRANSITION_WINDOW_MS = 0.180  # Pre-Pose -> Post-Pose within 180ms
+    SNAP_COOLDOWN_SEC = 2.0            # Refractory period
 
     VELOCITY_DEADBAND = 0.03        # ||V|| < 0.03 -> V = 0
     SWIPE_VELOCITY_THRESHOLD = 1.6  # ||V|| > 1.6 -> SWIPE

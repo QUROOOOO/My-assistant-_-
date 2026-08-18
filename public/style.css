@@ -460,7 +460,7 @@ body, html {
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
-/* 4-Card Slide-Up Gesture Manual Overlay */
+/* Slide-Up Gesture Manual Overlay */
 .gesture-manual-overlay {
     position: fixed;
     bottom: 0;
@@ -481,7 +481,7 @@ body, html {
 
 .manual-sheet {
     width: 100%;
-    max-width: 980px;
+    max-width: 1100px;
     margin: 0 1.5rem 1.5rem 1.5rem;
     background: rgba(14, 14, 18, 0.88);
     backdrop-filter: blur(36px);
@@ -515,116 +515,81 @@ body, html {
     color: var(--text);
 }
 
-.manual-cards-grid {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 1rem;
+/* Horizontal Scroll Container */
+.manual-scroll-container {
+    display: flex;
+    overflow-x: auto;
+    gap: 16px;
+    padding: 4px 4px 12px 4px;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    scrollbar-color: var(--text-dim) transparent;
 }
 
-@media (max-width: 768px) {
-    .manual-cards-grid {
-        grid-template-columns: repeat(2, 1fr);
-    }
+.manual-scroll-container::-webkit-scrollbar {
+    height: 4px;
 }
 
-.portrait-card {
+.manual-scroll-container::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.manual-scroll-container::-webkit-scrollbar-thumb {
+    background: var(--text-dim);
+    border-radius: 9999px;
+}
+
+/* Gesture Tiles: Thinner Portrait Cards, No Icons, Uniform Style */
+.gesture-tile {
+    width: 160px;
+    min-width: 160px;
+    height: 240px;
     background: var(--card-bg);
     border: 1px solid var(--border);
     border-radius: 20px;
-    padding: 1.4rem 1.15rem;
+    padding: 1.4rem 1.1rem;
     display: flex;
     flex-direction: column;
-    justify-content: space-between;
-    min-height: 220px;
+    justify-content: flex-end;
+    gap: 0.35rem;
+    scroll-snap-align: start;
     transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), background 0.2s, border-color 0.2s, box-shadow 0.25s;
+    flex-shrink: 0;
 }
 
-.portrait-card:hover {
+.gesture-tile:hover {
     transform: translateY(-4px);
     background: var(--card-hover);
     border-color: rgba(255, 255, 255, 0.25);
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
 }
 
-[data-theme="light"] .portrait-card:hover {
+[data-theme="light"] .gesture-tile:hover {
     border-color: rgba(0, 0, 0, 0.2);
 }
 
-.portrait-card-icon {
-    width: 40px;
-    height: 40px;
-    border-radius: 12px;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--text);
-    margin-bottom: 1.2rem;
-}
-
-[data-theme="light"] .portrait-card-icon {
-    background: rgba(0, 0, 0, 0.04);
-}
-
-.portrait-card-content {
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-}
-
-.portrait-card-tag {
-    font-size: 0.62rem;
+.tile-tag {
+    font-size: 0.60rem;
     font-weight: 700;
     letter-spacing: 1.5px;
     color: var(--text-dim);
     text-transform: uppercase;
 }
 
-.portrait-card-title {
-    font-size: 0.95rem;
+.tile-title {
+    font-size: 0.92rem;
     font-weight: 800;
     letter-spacing: 0.5px;
     color: var(--text);
     margin: 0;
 }
 
-.portrait-card-desc {
-    font-size: 0.72rem;
+.tile-desc {
+    font-size: 0.68rem;
     line-height: 1.4;
     color: var(--text-dim);
     margin: 0;
-}
-
-.snap-portrait-card {
-    background: rgba(192, 132, 252, 0.06);
-    border: 1px solid rgba(192, 132, 252, 0.30);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.snap-portrait-card:hover {
-    background: rgba(192, 132, 252, 0.12);
-    border-color: rgba(192, 132, 252, 0.55);
-    box-shadow: 0 10px 30px rgba(192, 132, 252, 0.2);
-}
-
-.snap-center-wrap {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 100%;
-    height: 100%;
-}
-
-.snap-hero-label {
-    color: #c084fc;
-    font-weight: 800;
-    letter-spacing: 4px;
-    font-size: 1.4rem;
-    text-shadow: 0 0 20px rgba(192, 132, 252, 0.5);
-    text-align: center;
 }
 
 /* Full-Screen Avengers Disintegration & Materialization FX Canvas */
