@@ -35,10 +35,10 @@ def ensure_model():
 
 
 # ---------------------------------------------------------------------------
-# Per-Hand Tracked State with Fist Hysteresis Latch & Biomechanical Snap
+# Per-Hand Tracked State with Continuous Flexion & Isolated Snap Machine
 # ---------------------------------------------------------------------------
 class HandState:
-    def __init__(self, raw_cx, raw_cy, raw_depth, raw_pinch, pinch_pos, label, is_open, is_fist, now):
+    def __init__(self, raw_cx, raw_cy, raw_depth, raw_pinch, pinch_pos, label, raw_flexion, now):
         self.filters = {
             "x":       OneEuroFilter(min_cutoff=1.5, beta=0.008),
             "y":       OneEuroFilter(min_cutoff=1.5, beta=0.008),
@@ -46,6 +46,7 @@ class HandState:
             "pinch":   OneEuroFilter(min_cutoff=2.0, beta=0.004),
             "pinch_x": OneEuroFilter(min_cutoff=1.5, beta=0.008),
             "pinch_y": OneEuroFilter(min_cutoff=1.5, beta=0.008),
+            "flexion": OneEuroFilter(min_cutoff=1.5, beta=0.008),
         }
         self.x = float(self.filters["x"](raw_cx, now))
         self.y = float(self.filters["y"](raw_cy, now))
@@ -53,6 +54,7 @@ class HandState:
         self.pinch = float(self.filters["pinch"](raw_pinch, now))
         self.pinch_x = float(self.filters["pinch_x"](pinch_pos[0], now))
         self.pinch_y = float(self.filters["pinch_y"](pinch_pos[1], now))
+        self.flexion = float(self.filters["flexion"](raw_flexion, now))
 
         self.vx = 0.0
         self.vy = 0.0
@@ -63,15 +65,15 @@ class HandState:
 
         self.is_pinching = bool(raw_pinch < GestureArbitrator.PINCH_ENTER_RATIO)
         self.label = str(label)
-        self.is_open = bool(is_open)
+        self.is_open = bool(raw_flexion >= GestureArbitrator.FIST_OPEN_THRESHOLD)
+        self.is_fist = bool(raw_flexion <= GestureArbitrator.FIST_TIGHT_THRESHOLD)
 
-        # ── Explicit State-Latched Fist Machine (Zero Premature Drops) ───
-        self.fist_latched = bool(is_fist)
-        self.is_fist = bool(is_fist)
-        self.ext_history = collections.deque(maxlen=10) # (time, e_hand)
+        # ── Continuous Flexion Tracking & Strict Bloom ───────────────────
+        self.flexion_history = collections.deque(maxlen=20) # (time, flexion)
+        self.flexion_history.append((now, self.flexion))
         self.bloom_triggered = False
 
-        # ── Biomechanical Snap Tracker ─────────────────────────────────
+        # ── Biomechanical Snap Tracker with Fist Isolation ───────────────
         self.snap_prime_counter = 0
         self.snap_primed = False
         self.snap_primed_time = 0.0
@@ -114,74 +116,77 @@ class HandState:
         self.pinch_x = float(self.filters["pinch_x"](pinch_pos[0], now))
         self.pinch_y = float(self.filters["pinch_y"](pinch_pos[1], now))
 
-        # ── State-Latched Fist Machine with Hysteresis ───────────────────
-        e_hand = float(np.mean(norm_tip_dists))
-        self.ext_history.append((now, e_hand))
-        while len(self.ext_history) > 1 and (now - self.ext_history[0][0]) > 0.160:
-            self.ext_history.popleft()
+        # ── Continuous Knuckle Extension Telemetry (1€ Filtered) ─────────
+        raw_flexion = float(np.mean(norm_tip_dists))
+        self.flexion = float(self.filters["flexion"](raw_flexion, now))
+        self.flexion_history.append((now, self.flexion))
 
-        fist_tip_count = int(np.sum(norm_tip_dists < GestureArbitrator.FIST_ENTER_THRESHOLD))
-        all_fingers_open = bool(np.all(norm_tip_dists > GestureArbitrator.FIST_EXIT_THRESHOLD))
+        # Maintain 300ms history window
+        while len(self.flexion_history) > 1 and (now - self.flexion_history[0][0]) > 0.300:
+            self.flexion_history.popleft()
 
+        self.is_open = bool(self.flexion >= 1.15)
+        self.is_fist = bool(self.flexion <= 0.65)
+
+        # ── Strict Bloom: Drop below 0.50 (tight fist) -> Explosive burst (dE/dt > 3.8)
         self.bloom_triggered = False
+        min_flex_in_window = min(f for t, f in self.flexion_history)
+        if min_flex_in_window <= GestureArbitrator.FIST_TIGHT_THRESHOLD and self.flexion >= 1.05:
+            # Find timestamp of lowest flexion
+            min_t = now
+            for t, f in self.flexion_history:
+                if f == min_flex_in_window:
+                    min_t = t
+                    break
+            dt_burst = max(now - min_t, 0.001)
+            dE_dt = (self.flexion - min_flex_in_window) / dt_burst
 
-        if not self.fist_latched:
-            # Enter Fist: at least 3 of 4 fingertips < 1.10
-            if fist_tip_count >= 3:
-                self.fist_latched = True
-                self.is_fist = True
-                self.is_open = False
-            else:
-                self.is_fist = False
-                self.is_open = all_fingers_open
-        else:
-            # Hold Fist: stay in COMPRESS continuously until all 4 extend > 1.45
-            self.is_fist = True
-            self.is_open = False
+            if dE_dt > GestureArbitrator.BLOOM_EXP_VELOCITY:
+                self.bloom_triggered = True
+                self.flexion_history.clear()
 
-            if all_fingers_open:
-                # Calculate snap-open extension velocity dE/dt over ~150ms
-                dE_dt = 0.0
-                if len(self.ext_history) >= 2:
-                    dt_win = max(now - self.ext_history[0][0], 0.001)
-                    dE_dt = (e_hand - self.ext_history[0][1]) / dt_win
+        # ── Biomechanical Snap Tracker with Fist Isolation ───────────────
+        # Ring (norm_tip_dists[2]) and Pinky (norm_tip_dists[3]) must be extended (> 1.0 * L_ref)
+        ring_ext = norm_tip_dists[2]
+        pinky_ext = norm_tip_dists[3]
+        snap_fingers_extended = bool(
+            ring_ext > GestureArbitrator.SNAP_FINGER_EXT_THRESHOLD and
+            pinky_ext > GestureArbitrator.SNAP_FINGER_EXT_THRESHOLD
+        )
 
-                # Fast Snap-Open -> BLOOM
-                if dE_dt > GestureArbitrator.BLOOM_SNAP_VELOCITY:
-                    self.bloom_triggered = True
-
-                self.fist_latched = False
-                self.is_fist = False
-                self.is_open = True
-
-        # ── Biomechanical Snap Recognition ───────────────────────────────
         self.snap_triggered = False
         snap_dD_dt = (norm_thumb_middle - self.prev_snap_dist) / max(dt, 0.001)
         self.prev_snap_dist = norm_thumb_middle
 
-        # Priming: Thumb & Middle finger touch (< 0.28) for >= 2 frames
-        if norm_thumb_middle < GestureArbitrator.SNAP_PRIMED_MAX_DIST:
-            self.snap_prime_counter += 1
-            if self.snap_prime_counter >= 2:
-                if not self.snap_primed:
-                    self.snap_primed = True
-                    self.snap_primed_time = now
-                    self.snap_primed_middle_y = middle_tip_y
+        if not snap_fingers_extended:
+            # Ring or Pinky is curled -> User is forming a fist. Abort snap immediately!
+            self.snap_primed = False
+            self.snap_prime_counter = 0
+            self.c_vision = 0.0
         else:
-            if self.snap_primed:
-                prime_dur = now - self.snap_primed_time
-                delta_y = middle_tip_y - self.snap_primed_middle_y # Downward slip
+            # Priming: Thumb & Middle finger touch (< 0.28) for >= 2 frames
+            if norm_thumb_middle < GestureArbitrator.SNAP_PRIMED_MAX_DIST:
+                self.snap_prime_counter += 1
+                if self.snap_prime_counter >= 2:
+                    if not self.snap_primed:
+                        self.snap_primed = True
+                        self.snap_primed_time = now
+                        self.snap_primed_middle_y = middle_tip_y
+            else:
+                if self.snap_primed:
+                    prime_dur = now - self.snap_primed_time
+                    delta_y = middle_tip_y - self.snap_primed_middle_y # Downward slip
 
-                if 0.025 <= prime_dur <= 0.220 and (delta_y > 0.06 or snap_dD_dt > 2.4):
-                    vel_factor = min(1.0, max(0.0, (snap_dD_dt - 2.4) / 1.6))
-                    y_factor = min(1.0, max(0.0, (delta_y - 0.06) / 0.08))
-                    self.c_vision = min(1.0, 0.62 + y_factor * 0.20 + vel_factor * 0.18)
+                    if 0.025 <= prime_dur <= 0.220 and (delta_y > 0.06 or snap_dD_dt > 2.4):
+                        vel_factor = min(1.0, max(0.0, (snap_dD_dt - 2.4) / 1.6))
+                        y_factor = min(1.0, max(0.0, (delta_y - 0.06) / 0.08))
+                        self.c_vision = min(1.0, 0.62 + y_factor * 0.20 + vel_factor * 0.18)
 
-                    if self.c_vision >= GestureArbitrator.SNAP_VISION_CONF_THRESHOLD:
-                        self.snap_triggered = True
+                        if self.c_vision >= GestureArbitrator.SNAP_VISION_CONF_THRESHOLD:
+                            self.snap_triggered = True
 
-                self.snap_primed = False
-                self.snap_prime_counter = 0
+                    self.snap_primed = False
+                    self.snap_prime_counter = 0
 
         self.c_vision = max(0.0, self.c_vision - dt * 2.5)
 
@@ -241,6 +246,7 @@ class GestureEngine:
         self.latest_state = {
             "hands": [],
             "state": "IDLE",
+            "flexion": 1.4,
             "two_hand_dist": 0.0,
             "dual_angle": 0.0,
             "dual_pinch": False,
@@ -331,9 +337,9 @@ class GestureEngine:
         slap_active = False
         slap_vx, slap_vy = 0.0, 0.0
         global_bloom = False
-        global_compress = False
         global_snap = False
         max_c_vision = 0.0
+        min_flexion = 1.4
 
         detected_labels = set()
 
@@ -393,9 +399,7 @@ class GestureEngine:
                 four_tips = pts[[8, 12, 16, 20]]
                 dists_to_wrist = np.linalg.norm(four_tips - wrist, axis=1)
                 norm_tip_dists = dists_to_wrist / safe_l_ref
-
-                is_fist_init = bool(np.sum(norm_tip_dists < GestureArbitrator.FIST_ENTER_THRESHOLD) >= 3)
-                is_open_init = bool(np.all(norm_tip_dists > GestureArbitrator.FIST_EXIT_THRESHOLD))
+                raw_flexion = float(np.mean(norm_tip_dists))
 
                 # 3D Palm Euler Vectorization
                 v1 = middle_mcp - wrist
@@ -408,11 +412,11 @@ class GestureEngine:
                 yaw   = float(math.atan2(normal[0], normal[2]))
                 roll  = float(math.atan2(v2[1], math.sqrt(v2[0]**2 + v2[2]**2)))
 
-                # ── Handedness-Keyed Update with Hysteresis Latch & Snap ──
+                # ── Handedness-Keyed Update with Continuous Flexion & Snap ──
                 if label not in self.hand_states:
                     self.hand_states[label] = HandState(
                         raw_cx, raw_cy, raw_depth, pinch_ratio, pinch_center,
-                        label, is_open_init, is_fist_init, now
+                        label, raw_flexion, now
                     )
                     self.hand_states[label].pitch = pitch
                     self.hand_states[label].yaw = yaw
@@ -434,13 +438,14 @@ class GestureEngine:
 
                 if sm.bloom_triggered:
                     global_bloom = True
-                if sm.is_fist:
-                    global_compress = True
+
+                if sm.flexion < min_flexion:
+                    min_flexion = sm.flexion
 
                 if sm.c_vision > max_c_vision:
                     max_c_vision = sm.c_vision
 
-                # Pure High-Confidence Vision Snap (Condition A: >= 0.62 with 2.0s cooldown)
+                # Pure High-Confidence Isolated Snap (>= 0.62 with 2.0s cooldown)
                 if sm.snap_triggered and (now - self.last_snap_time) > GestureArbitrator.SNAP_COOLDOWN_SEC:
                     global_snap = True
                     self.last_snap_time = now
@@ -466,10 +471,10 @@ class GestureEngine:
                 "pinch_y": sm.pinch_y,
                 "depth_scale": min(max(sm.depth, 0.5), 2.2),
                 "pinch_dist": sm.pinch,
+                "flexion": round(sm.flexion, 3),
                 "is_pinching": sm.is_pinching,
                 "is_open": sm.is_open,
                 "is_fist": sm.is_fist,
-                "fist_latched": sm.fist_latched,
                 "c_vision": round(sm.c_vision, 3),
                 "pitch": round(sm.pitch, 4),
                 "yaw": round(sm.yaw, 4),
@@ -530,7 +535,7 @@ class GestureEngine:
             state = GestureArbitrator.STATE_DUAL_PINCH
         elif grab_hand is not None:
             state = GestureArbitrator.STATE_GRAB
-        elif global_compress:
+        elif min_flexion <= 0.65:
             state = GestureArbitrator.STATE_COMPRESS
         elif slap_active:
             state = GestureArbitrator.STATE_SWIPE
@@ -541,13 +546,14 @@ class GestureEngine:
             "hands": hands_data,
             "state": state,
             "event": event,
+            "flexion": round(min_flexion, 3),
             "two_hand_dist": two_hand_dist,
             "dual_angle": round(dual_angle, 4),
             "dual_pinch": dual_pinch,
             "dual_pinch_center": dual_pinch_center,
             "grab_hand": grab_hand,
             "bloom": global_bloom,
-            "compress": global_compress,
+            "compress": bool(min_flexion <= 0.65),
             "snap": global_snap,
             "c_vision": round(max_c_vision, 3),
             "slap_impulse": {"active": slap_active, "vx": slap_vx, "vy": slap_vy}
