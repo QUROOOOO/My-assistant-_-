@@ -76,13 +76,7 @@ class HandState:
         # ── Fist Hysteresis State for Bloom ─────────────────────────────
         self.fist_entered_time = 0.0
         self.fist_latched = False
-
-        # ── Post-Pose Delta State Matching Snap Tracker ─────────────────
-        self.snap_ready = False
-        self.snap_ready_time = 0.0
-        self.snap_triggered = False
-
-        # 3D Palm Normal Euler angles
+# 3D Palm Normal Euler angles
         self.pitch = 0.0
         self.yaw = 0.0
         self.roll = 0.0
@@ -130,59 +124,37 @@ class HandState:
         all_tips_close = all(d < GestureArbitrator.FIST_FINGERTIP_THRESHOLD for d in norm_tip_dists)
         self.is_fist = all_tips_close
 
-        # ── Fist Hysteresis for Bloom Gating ─────────────────────────────
+        # ── Strict Fist Hysteresis for Bloom Gating ─────────────────────
+        self.bloom_triggered = False
+
         if all_tips_close:
+            # Fist detected: latch immediately, reset open-frame counter
             if not self.fist_latched:
                 self.fist_latched = True
                 self.fist_entered_time = now
+            self._open_frame_counter = 0  # Reset hysteresis counter
         else:
-            # Check for BLOOM: fist held > 200ms AND all fingers now > 1.6 * L_ref
-            self.bloom_triggered = False
+            # Hand NOT in fist: require 3 consecutive open frames before unlatching
+            if not hasattr(self, '_open_frame_counter'):
+                self._open_frame_counter = 0
+            self._open_frame_counter += 1
+
             if self.fist_latched:
-                fist_hold_duration = now - self.fist_entered_time
-                all_extended = all(d > GestureArbitrator.BLOOM_OPEN_THRESHOLD for d in norm_tip_dists)
+                if self._open_frame_counter >= 3:
+                    # Only now check for BLOOM and unlatch
+                    fist_hold_duration = now - self.fist_entered_time
+                    all_extended = all(d > GestureArbitrator.BLOOM_OPEN_THRESHOLD for d in norm_tip_dists)
 
-                if fist_hold_duration >= GestureArbitrator.BLOOM_FIST_HOLD_MS and all_extended:
-                    # Check rapidity: measure expansion velocity
-                    min_flex_in_window = min(f for t, f in self.flexion_history)
-                    if min_flex_in_window <= GestureArbitrator.FIST_TIGHT_THRESHOLD:
-                        self.bloom_triggered = True
-                        self.flexion_history.clear()
+                    if fist_hold_duration >= GestureArbitrator.BLOOM_FIST_HOLD_MS and all_extended:
+                        # Measure expansion velocity from flexion history
+                        min_flex_in_window = min(f for t, f in self.flexion_history) if self.flexion_history else 1.0
+                        if min_flex_in_window <= GestureArbitrator.FIST_TIGHT_THRESHOLD:
+                            self.bloom_triggered = True
+                            self.flexion_history.clear()
 
-                self.fist_latched = False
-                self.fist_entered_time = 0.0
-
-        # ── Post-Pose Delta State Matching Snap Detection ────────────────
-        # Pre-Pose: Thumb(4) + Middle(12) pinched: ||P4 - P12|| / L_ref < 0.25
-        wrist = pts[0]
-        thumb_tip = pts[4]
-        index_mcp = pts[5]
-        middle_tip = pts[12]
-
-        thumb_middle_dist = float(np.linalg.norm(thumb_tip - middle_tip)) / safe_l_ref
-        thumb_index_mcp_dist = float(np.linalg.norm(thumb_tip - index_mcp)) / safe_l_ref
-        middle_palm_dist = float(np.linalg.norm(middle_tip - wrist)) / safe_l_ref
-
-        self.snap_triggered = False
-
-        if thumb_middle_dist < GestureArbitrator.SNAP_PREPOSE_THUMB_MIDDLE:
-            # In pre-pose: thumb and middle are touching (ready to snap)
-            if not self.snap_ready:
-                self.snap_ready = True
-                self.snap_ready_time = now
-        else:
-            # Not in pre-pose. Check if we transitioned to post-pose within 180ms
-            if self.snap_ready:
-                elapsed_since_ready = now - self.snap_ready_time
-                post_thumb_index = thumb_index_mcp_dist < GestureArbitrator.SNAP_POSTPOSE_THUMB_INDEX
-                post_middle_curled = middle_palm_dist < GestureArbitrator.SNAP_POSTPOSE_MIDDLE_PALM
-
-                if elapsed_since_ready <= GestureArbitrator.SNAP_TRANSITION_WINDOW_MS:
-                    if post_thumb_index and post_middle_curled:
-                        self.snap_triggered = True
-
-                self.snap_ready = False
-
+                    self.fist_latched = False
+                    self.fist_entered_time = 0.0
+                # else: still within hysteresis window — stay latched as COMPRESS
         self.label = str(label)
         self.pitch = float(pitch)
         self.yaw = float(yaw)
@@ -212,6 +184,8 @@ class GestureEngine:
         )
         self.detector = vision.HandLandmarker.create_from_options(options)
         self.running = True
+        self._missing_frames = 0
+        self._last_known_landmarks = None  # Persist last valid landmarks for up to 4 frames
 
         # Handedness-keyed tracking dictionaries
         self.hand_states = {}
@@ -233,8 +207,6 @@ class GestureEngine:
         self._frame_buffer = collections.deque(maxlen=1)
 
         # Global Snap Cooldown Refractory Timer (2.0s)
-        self.last_snap_time = 0.0
-
         self.last_frame_time = time.time()
         self.latest_state = {
             "hands": [],
@@ -329,13 +301,24 @@ class GestureEngine:
         slap_active = False
         slap_vx, slap_vy = 0.0, 0.0
         global_bloom = False
-        global_snap = False
         min_flexion = 1.4
 
         detected_labels = set()
 
-        if res.hand_landmarks:
-            for idx, lms in enumerate(res.hand_landmarks):
+        # ── Landmark Persistence: reuse last known for up to 4 missing frames ──
+        active_landmarks = res.hand_landmarks
+        if active_landmarks:
+            self._last_known_landmarks = active_landmarks
+            self._missing_frames = 0
+        else:
+            self._missing_frames += 1
+            if self._missing_frames <= 4 and self._last_known_landmarks is not None:
+                active_landmarks = self._last_known_landmarks
+            else:
+                active_landmarks = []
+
+        if active_landmarks:
+            for idx, lms in enumerate(active_landmarks):
                 label = "Right"
                 if res.handedness and idx < len(res.handedness):
                     label = res.handedness[idx][0].category_name
@@ -427,12 +410,6 @@ class GestureEngine:
 
                 if sm.flexion < min_flexion:
                     min_flexion = sm.flexion
-
-                # Post-Pose Delta Snap (with 2.0s cooldown)
-                if sm.snap_triggered and (now - self.last_snap_time) > GestureArbitrator.SNAP_COOLDOWN_SEC:
-                    global_snap = True
-                    self.last_snap_time = now
-
         # ── Persistence Cleanup ──────────────────────────────────────────
         all_tracked = list(self.hand_states.keys())
         for label in all_tracked:
@@ -507,11 +484,7 @@ class GestureEngine:
 
         # Determine Dominant State
         state = GestureArbitrator.STATE_IDLE
-        event = None
-        if global_snap:
-            state = GestureArbitrator.STATE_SNAP
-            event = "SNAP"
-        elif global_bloom:
+        if global_bloom:
             state = GestureArbitrator.STATE_BLOOM
         elif dual_pinch:
             state = GestureArbitrator.STATE_DUAL_PINCH
@@ -527,7 +500,6 @@ class GestureEngine:
         self.latest_state = {
             "hands": hands_data,
             "state": state,
-            "event": event,
             "flexion": round(min_flexion, 3),
             "two_hand_dist": two_hand_dist,
             "dual_angle": round(dual_angle, 4),
@@ -536,14 +508,13 @@ class GestureEngine:
             "grab_hand": grab_hand,
             "bloom": global_bloom,
             "compress": bool(min_flexion <= 0.65),
-            "snap": global_snap,
             "slap_impulse": {"active": slap_active, "vx": slap_vx, "vy": slap_vy}
         }
 
         # ── True 60 FPS Binary Frame Push (480x270 @ Quality 60) ────────
         if len(self.live_feed_clients) > 0 or self.stream_viewers > 0:
-            preview = cv2.resize(frame, (480, 270), interpolation=cv2.INTER_LINEAR)
-            ret, jpeg = cv2.imencode('.jpg', preview, [cv2.IMWRITE_JPEG_QUALITY, 60])
+            preview = cv2.resize(frame, (640, 360), interpolation=cv2.INTER_LINEAR)
+            ret, jpeg = cv2.imencode('.jpg', preview, [cv2.IMWRITE_JPEG_QUALITY, 85])
             if ret:
                 jpeg_bytes = jpeg.tobytes()
                 with self._jpeg_lock:

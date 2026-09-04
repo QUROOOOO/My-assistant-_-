@@ -3,7 +3,6 @@ const ctx = canvas.getContext('2d');
 const fxCanvas = document.getElementById('fx-canvas');
 const fxCtx = fxCanvas.getContext('2d');
 
-const handsMeter = document.getElementById('hands-meter');
 const wsStatus = document.getElementById('ws-status');
 const hudElement = document.querySelector('.hud');
 const settingsDrawer = document.getElementById('settings-drawer');
@@ -15,10 +14,6 @@ const manualOverlay = document.getElementById('gesture-manual-overlay');
 const manualToggleBtn = document.getElementById('gesture-manual-toggle');
 const closeManualBtn = document.getElementById('close-manual');
 
-// Offscreen canvas for 50x50 3D Pixel Block Reintegration
-const offscreenCanvas = document.createElement('canvas');
-const offscreenCtx = offscreenCanvas.getContext('2d');
-
 let width, height, dpr;
 function resize() {
     dpr = window.devicePixelRatio || 1;
@@ -28,15 +23,7 @@ function resize() {
     canvas.width = width * dpr;
     canvas.height = height * dpr;
     ctx.scale(dpr, dpr);
-
-    fxCanvas.width = width * dpr;
-    fxCanvas.height = height * dpr;
-    fxCtx.scale(dpr, dpr);
-
-    offscreenCanvas.width = width * dpr;
-    offscreenCanvas.height = height * dpr;
-    offscreenCtx.scale(dpr, dpr);
-}
+    }
 window.addEventListener('resize', resize);
 resize();
 
@@ -152,7 +139,7 @@ let targetRadius = R0;
 let smoothRadius = R0;
 let currentFlexion = 1.4;
 
-let gestureState = 'IDLE'; // IDLE | HOVER | GRAB | DUAL_PINCH | COMPRESS | BLOOM | SWIPE | SNAP
+let gestureState = 'IDLE'; // IDLE | HOVER | GRAB | DUAL_PINCH | COMPRESS | BLOOM | SWIPE
 let anchorDualDist = 0.0;
 let anchorDualScale = 1.0;
 let anchorGrabHand = { x: 0, y: 0, depth: 1.0 };
@@ -177,288 +164,14 @@ let audioMode = 'both';
 let hasHands = false;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 3. 6s CASCADING THANOS DISINTEGRATION & 50x50 3D PIXEL BLOCK REINTEGRATION
+// 4. HIGH-RESOLUTION FFT AUDIO REACTIVITY ENGINE (fftSize=1024)
 // ═══════════════════════════════════════════════════════════════════════════
-let isDisintegrated = false;
-let blipAnimationActive = false;
-let blipMode = 'DISINTEGRATE'; // 'DISINTEGRATE' | 'MATERIALIZE'
-let blipStartTime = 0;
-const DISINTEGRATE_DURATION = 6.0;  // 5.5-6.0 seconds total
-const MATERIALIZE_DURATION = 2.5;   // 2.5 seconds for block flip
-
-// Dust Particles for Snap 1 (Cascading Thanos Disintegration)
-const DUST_PARTICLE_COUNT = 5000;
-const dustParticles = [];
-
-for (let p = 0; p < DUST_PARTICLE_COUNT; p++) {
-    dustParticles.push({
-        x: 0, y: 0,
-        x0: 0, y0: 0,
-        vx: 0, vy: 0,
-        size: 1.0 + Math.random() * 2.5,
-        alpha: 1.0,
-        dissolveDelay: 0.0, // cascading delay based on position
-        curlSeed: Math.random() * 1000,
-        curlFreq: 0.008 + Math.random() * 0.015,
-        curlAmp: 1.2 + Math.random() * 2.8,
-        colorType: Math.random() > 0.4 ? 'silver' : 'charcoal',
-        dissolved: false
-    });
-}
-
-// 50x50 Pixel Block Grid for Snap 2 (3D Flip Reintegration)
-const BLOCK_SIZE = 50;
-let pixelBlocks = [];
-
-function buildPixelBlockGrid() {
-    pixelBlocks = [];
-    const cols = Math.ceil(width / BLOCK_SIZE);
-    const rows = Math.ceil(height / BLOCK_SIZE);
-    const centerX = width / 2;
-    const centerY = height / 2;
-    const maxDist = Math.hypot(centerX, centerY) || 1.0;
-
-    for (let r = 0; r < rows; r++) {
-        for (let c = 0; c < cols; c++) {
-            const bx = c * BLOCK_SIZE;
-            const by = r * BLOCK_SIZE;
-            const dist = Math.hypot(bx + BLOCK_SIZE / 2 - centerX, by + BLOCK_SIZE / 2 - centerY);
-            // Center-out cascading stagger delay (up to 0.8s)
-            const staggerDelay = (dist / maxDist) * 0.8;
-            pixelBlocks.push({
-                x: bx,
-                y: by,
-                w: Math.min(BLOCK_SIZE, width - bx),
-                h: Math.min(BLOCK_SIZE, height - by),
-                delay: staggerDelay,
-                duration: 1.4
-            });
-        }
-    }
-}
-
-function collectUiAndOrbTargets() {
-    const targets = [];
-    for (let i = 0; i < POINT_COUNT; i++) {
-        targets.push({ x: projX[i] || (width / 2), y: projY[i] || (height / 2) });
-    }
-
-    const uiSelectors = ['.brand', '.status-pill', '#camera-feed-toggle', '#settings-btn', '.minimal-pill', '#gesture-manual-toggle'];
-    uiSelectors.forEach(sel => {
-        const el = document.querySelector(sel);
-        if (el) {
-            const rect = el.getBoundingClientRect();
-            const sampleCount = 120;
-            for (let s = 0; s < sampleCount; s++) {
-                targets.push({
-                    x: rect.left + Math.random() * rect.width,
-                    y: rect.top + Math.random() * rect.height
-                });
-            }
-        }
-    });
-
-    while (targets.length < DUST_PARTICLE_COUNT) {
-        targets.push({
-            x: orbCenter.x + (Math.random() - 0.5) * R0 * 2.2,
-            y: orbCenter.y + (Math.random() - 0.5) * R0 * 2.2
-        });
-    }
-    return targets;
-}
-
-// Simple hash-based curl noise for organic scatter
-function curlNoise2D(x, y, seed) {
-    const s1 = Math.sin(x * 0.013 + seed) * Math.cos(y * 0.017 + seed * 1.3);
-    const s2 = Math.cos(x * 0.011 - seed * 0.7) * Math.sin(y * 0.019 + seed * 0.5);
-    return { dx: s1 * 2.8, dy: s2 * 2.8 };
-}
-
-function captureOffscreenSnapshot() {
-    offscreenCtx.clearRect(0, 0, width, height);
-
-    // Render static snapshot of ASCII Orb to offscreen canvas
-    offscreenCtx.textAlign = 'center';
-    offscreenCtx.textBaseline = 'middle';
-
-    const isDark = currentTheme === 'dark';
-    const colorCache = isDark ? DARK_COLOR_CACHE : LIGHT_COLOR_CACHE;
-
-    for (let j = 0; j < POINT_COUNT; j++) {
-        const i = renderOrder[j];
-        const fontSize = Math.max(6, Math.min(80, Math.floor(16 * projDepth[i])));
-        offscreenCtx.font = FONT_CACHE[fontSize] || FONT_CACHE[16];
-        offscreenCtx.fillStyle = colorCache[projAlphaIdx[i]];
-        offscreenCtx.fillText(projGlyph[i], projX[i], projY[i]);
-    }
-}
-
-function triggerSnapEffect() {
-    const now = performance.now() / 1000;
-    blipStartTime = now;
-    blipAnimationActive = true;
-
-    if (!isDisintegrated) {
-        // ── SNAP 1: 6s CASCADING THANOS DISINTEGRATION ──────────────────
-        blipMode = 'DISINTEGRATE';
-        const targets = collectUiAndOrbTargets();
-
-        for (let i = 0; i < DUST_PARTICLE_COUNT; i++) {
-            const dp = dustParticles[i];
-            const t = targets[i % targets.length];
-            dp.x0 = t.x;
-            dp.y0 = t.y;
-            dp.x = t.x;
-            dp.y = t.y;
-            dp.dissolved = false;
-            dp.alpha = 0.95;
-
-            // Cascading dissolve delay based on X coordinate (left-to-right) + noise
-            const normalizedX = t.x / width;
-            const noiseOffset = (Math.sin(i * 7.3) * 0.5 + 0.5) * 0.4;
-            dp.dissolveDelay = normalizedX * 2.8 + noiseOffset * 0.7; // 0.0s to ~3.5s
-
-            // Scattered wind vectors: base upward-right drift with curl noise variation
-            const baseVx = 1.2 + Math.random() * 1.8;
-            const baseVy = -1.5 - Math.random() * 2.0;
-            dp.vx = baseVx;
-            dp.vy = baseVy;
-        }
-
-        hudElement.classList.add('disintegrated');
-        canvas.classList.add('disintegrated');
-        settingsDrawer.classList.add('disintegrated');
-        if (sensorHud) sensorHud.classList.add('disintegrated');
-        if (manualOverlay) manualOverlay.classList.add('disintegrated');
-
-        isDisintegrated = true;
-    } else {
-        // ── SNAP 2: 50x50 3D PIXEL BLOCK REINTEGRATION ─────────────────
-        blipMode = 'MATERIALIZE';
-        buildPixelBlockGrid();
-        captureOffscreenSnapshot();
-
-        isDisintegrated = false;
-    }
-}
-
-function updateBlipFX(nowSec) {
-    if (!blipAnimationActive) return;
-
-    const elapsed = nowSec - blipStartTime;
-    fxCtx.clearRect(0, 0, width, height);
-
-    if (blipMode === 'DISINTEGRATE') {
-        // ── 6-SECOND CASCADING THANOS DISINTEGRATION ────────────────────
-        let allGone = true;
-
-        for (let i = 0; i < DUST_PARTICLE_COUNT; i++) {
-            const dp = dustParticles[i];
-
-            // Wait for cascading dissolve delay
-            const particleTime = elapsed - dp.dissolveDelay;
-            if (particleTime < 0) {
-                // Not yet dissolved - still rendered as static pixel
-                fxCtx.fillStyle = dp.colorType === 'silver'
-                    ? 'rgba(195, 195, 210, 0.85)'
-                    : 'rgba(90, 90, 105, 0.70)';
-                fxCtx.fillRect(dp.x, dp.y, dp.size, dp.size);
-                allGone = false;
-                continue;
-            }
-
-            if (!dp.dissolved) {
-                dp.dissolved = true;
-            }
-
-            // Remaining animation time after dissolve (up to ~2.5s of drift)
-            const driftDuration = 2.5;
-            const driftProgress = Math.min(particleTime / driftDuration, 1.0);
-
-            // Curl noise for organic scatter paths
-            const curl = curlNoise2D(dp.x, dp.y, dp.curlSeed);
-            const tScale = 1.0 + particleTime * 0.4;
-
-            dp.x += (dp.vx * tScale + curl.dx * dp.curlAmp) * 0.8;
-            dp.y += (dp.vy * tScale + curl.dy * dp.curlAmp) * 0.8;
-
-            // Fade out over drift
-            dp.alpha = Math.max(0.0, 1.0 - driftProgress);
-
-            if (dp.alpha > 0.01) {
-                allGone = false;
-                fxCtx.fillStyle = dp.colorType === 'silver'
-                    ? `rgba(195, 195, 210, ${dp.alpha.toFixed(2)})`
-                    : `rgba(90, 90, 105, ${(dp.alpha * 0.85).toFixed(2)})`;
-                fxCtx.fillRect(dp.x, dp.y, dp.size, dp.size);
-            }
-        }
-
-        if (elapsed >= DISINTEGRATE_DURATION || allGone) {
-            blipAnimationActive = false;
-            fxCtx.clearRect(0, 0, width, height);
-        }
-    } else if (blipMode === 'MATERIALIZE') {
-        // ── 50x50 PIXEL BLOCK 3D FLIP REINTEGRATION (2.5s) ─────────────
-        let allCompleted = true;
-
-        for (let b = 0; b < pixelBlocks.length; b++) {
-            const block = pixelBlocks[b];
-            const blockElapsed = elapsed - block.delay;
-
-            let angle = Math.PI / 2; // 90° invisible default
-
-            if (blockElapsed > 0) {
-                const p = Math.min(1.0, blockElapsed / block.duration);
-                if (p < 1.0) allCompleted = false;
-                // easeOutCubic from 90° (PI/2) down to 0°
-                const ease = 1.0 - Math.pow(1.0 - p, 3.0);
-                angle = (Math.PI / 2) * (1.0 - ease);
-            } else {
-                allCompleted = false;
-            }
-
-            if (angle < (Math.PI / 2 - 0.001)) {
-                fxCtx.save();
-                const midX = block.x + block.w / 2;
-                const midY = block.y + block.h / 2;
-                fxCtx.translate(midX, midY);
-                fxCtx.scale(1, Math.cos(angle));
-
-                fxCtx.drawImage(
-                    offscreenCanvas,
-                    block.x * dpr, block.y * dpr, block.w * dpr, block.h * dpr,
-                    -block.w / 2, -block.h / 2, block.w, block.h
-                );
-                fxCtx.restore();
-            }
-        }
-
-        if (elapsed >= MATERIALIZE_DURATION || allCompleted) {
-            blipAnimationActive = false;
-            fxCtx.clearRect(0, 0, width, height);
-
-            hudElement.classList.remove('disintegrated');
-            canvas.classList.remove('disintegrated');
-            settingsDrawer.classList.remove('disintegrated');
-            if (sensorHud) sensorHud.classList.remove('disintegrated');
-            if (manualOverlay) manualOverlay.classList.remove('disintegrated');
-        }
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// 4. MULTIMODAL ACOUSTIC TRANSIENT ANALYZER (2.8 kHz High-Pass Filter)
-// ═══════════════════════════════════════════════════════════════════════════
-let audioCtx, analyser, biquadFilter, micSource;
-let snapHighPassFilter, snapAnalyser, snapDataArray;
-let audioDataArray;
+let audioCtx, analyser, micSource;
+let audioFreqData;      // Uint8Array of 512 frequency bins (fftSize/2)
+let audioFreqSmoothed;  // Float32Array smoothed per-bin values
 let smoothAudio = 0.0;
-let prevRawAudio = 0.0;
-let prevSnapEnergy = 0.0;
-let cAudio = 0.0;
-let lastSnapTriggerTime = 0.0;
-let ambientNoiseFloor = 0.012;
+const FFT_SIZE = 1024;
+const BIN_COUNT = FFT_SIZE / 2; // 512 bins
 
 function initAudio() {
     if (audioCtx) return;
@@ -466,33 +179,15 @@ function initAudio() {
         const AC = window.AudioContext || window.webkitAudioContext;
         audioCtx = new AC();
 
-        biquadFilter = audioCtx.createBiquadFilter();
-        biquadFilter.type = 'bandpass';
-        biquadFilter.frequency.value = 2190;
-        biquadFilter.Q.value = 0.65;
-
         analyser = audioCtx.createAnalyser();
-        analyser.fftSize = 256;
-        analyser.smoothingTimeConstant = 0.25;
-        audioDataArray = new Uint8Array(analyser.frequencyBinCount);
+        analyser.fftSize = FFT_SIZE;
+        analyser.smoothingTimeConstant = 0.50; // Lower = sharper transient response
+        audioFreqData    = new Uint8Array(analyser.frequencyBinCount);
+        audioFreqSmoothed = new Float32Array(analyser.frequencyBinCount);
 
-        snapHighPassFilter = audioCtx.createBiquadFilter();
-        snapHighPassFilter.type = 'highpass';
-        snapHighPassFilter.frequency.value = 2800;
-        snapHighPassFilter.Q.value = 1.4;
-
-        snapAnalyser = audioCtx.createAnalyser();
-        snapAnalyser.fftSize = 256;
-        snapAnalyser.smoothingTimeConstant = 0.10;
-        snapDataArray = new Uint8Array(snapAnalyser.frequencyBinCount);
-
-        navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+        navigator.mediaDevices.getUserMedia({ audio: true, video: false }).then(stream => {
             micSource = audioCtx.createMediaStreamSource(stream);
-            micSource.connect(biquadFilter);
-            biquadFilter.connect(analyser);
-
-            micSource.connect(snapHighPassFilter);
-            snapHighPassFilter.connect(snapAnalyser);
+            micSource.connect(analyser);
         }).catch(err => {
             console.warn("Microphone access deferred:", err);
         });
@@ -500,60 +195,55 @@ function initAudio() {
         console.warn("Audio initialization deferred");
     }
 }
-window.addEventListener('click', initAudio, { once: true });
-window.addEventListener('touchstart', initAudio, { once: true });
 
-function updateAudioEnergy() {
-    for (let k = 0; k < FLARE_COUNT; k++) {
-        flareEnergies[k] *= 0.88;
-    }
-
-    cAudio = Math.max(0.0, cAudio - 0.04);
-
-    if (audioMode === 'off' || !analyser || !audioDataArray) {
-        smoothAudio += (0.0 - smoothAudio) * 0.10;
+function updateAudio() {
+    if (!analyser || audioMode === 'off') {
+        smoothAudio = 0.0;
         return;
     }
 
-    analyser.getByteFrequencyData(audioDataArray);
-    let sum = 0;
-    for (let i = 0; i < audioDataArray.length; i++) {
-        sum += audioDataArray[i];
-    }
-    const rawEnergy = (sum / audioDataArray.length) / 255.0;
+    analyser.getByteFrequencyData(audioFreqData);
 
-    ambientNoiseFloor = ambientNoiseFloor * 0.993 + rawEnergy * 0.007;
-
-    let gatedEnergy = 0.0;
-    const gateThreshold = ambientNoiseFloor * 1.4;
-    if (rawEnergy > gateThreshold) {
-        gatedEnergy = Math.min((rawEnergy - gateThreshold) * sensitivity * 12.5, 1.0);
-
-        const deltaRMS = rawEnergy - prevRawAudio;
-        if (deltaRMS > 0.025) {
-            const triggerCount = 1 + Math.floor(Math.random() * 3);
-            for (let t = 0; t < triggerCount; t++) {
-                const k = Math.floor(Math.random() * FLARE_COUNT);
-                const peakMultiplier = 0.4 + Math.random() * 0.8;
-                flareEnergies[k] = Math.min(1.4, flareEnergies[k] + gatedEnergy * peakMultiplier * 1.8);
-            }
+    // Per-bin temporal smoothing with fast attack, slow decay for sharp reactivity
+    let totalEnergy = 0.0;
+    for (let i = 0; i < BIN_COUNT; i++) {
+        const rawBin = audioFreqData[i] / 255.0;
+        // Fast attack (0.65), slower decay (0.15) for instant syllable response
+        if (rawBin > audioFreqSmoothed[i]) {
+            audioFreqSmoothed[i] += (rawBin - audioFreqSmoothed[i]) * 0.65;
+        } else {
+            audioFreqSmoothed[i] += (rawBin - audioFreqSmoothed[i]) * 0.15;
         }
+        totalEnergy += audioFreqSmoothed[i];
     }
-    prevRawAudio = rawEnergy;
-    smoothAudio += (gatedEnergy - smoothAudio) * 0.14;
 
-    if (snapAnalyser && snapDataArray) {
-        snapAnalyser.getByteFrequencyData(snapDataArray);
-        let snapSum = 0;
-        for (let i = 0; i < snapDataArray.length; i++) {
-            snapSum += snapDataArray[i];
+    const avgEnergy = totalEnergy / BIN_COUNT;
+    smoothAudio = avgEnergy * sensitivity * 2.2;
+
+    // Map FFT bins directly onto the 1400-node Fibonacci sphere by latitude/index
+    // Nodes are ordered top-to-bottom by latitude (phi), so we map bins by node index
+    const binsPerNode = BIN_COUNT / POINT_COUNT;
+    for (let k = 0; k < FLARE_COUNT; k++) {
+        // Map flare k to its corresponding frequency band
+        const flareNodeIdx = Math.floor((k / FLARE_COUNT) * POINT_COUNT);
+        const binStart = Math.floor(flareNodeIdx * binsPerNode);
+        const binEnd   = Math.min(BIN_COUNT - 1, Math.floor(binStart + binsPerNode * (POINT_COUNT / FLARE_COUNT)));
+
+        let bandEnergy = 0.0;
+        for (let b = binStart; b <= binEnd; b++) {
+            bandEnergy += audioFreqSmoothed[b];
         }
-        const highEnergy = (snapSum / snapDataArray.length) / 255.0;
-        const dEnergyHigh = highEnergy - prevSnapEnergy;
-        prevSnapEnergy = highEnergy;
+        const bandWidth = (binEnd - binStart + 1);
+        const normalizedBandEnergy = (bandEnergy / bandWidth) * sensitivity * 2.5;
 
-        if (dEnergyHigh > 0.035) {
-            cAudio = Math.min(1.0, (dEnergyHigh - 0.035) * 18.0 + 0.50);
+        // Inject energy into flare centroid with transient boost on beats
+        const delta = normalizedBandEnergy - flareEnergies[k];
+        if (delta > 0.05) {
+            // Sharp transient attack — immediate injection
+            flareEnergies[k] = Math.min(1.5, flareEnergies[k] + delta * 1.8);
+        } else {
+            // Exponential decay
+            flareEnergies[k] = Math.max(0.0, flareEnergies[k] * 0.88 + normalizedBandEnergy * 0.12);
         }
     }
 }
@@ -574,9 +264,6 @@ function connectWS() {
             const data = JSON.parse(e.data);
             const handCount = data.hands ? data.hands.length : 0;
             const now = performance.now() / 1000;
-
-            handsMeter.innerText = `${handCount} HAND${handCount === 1 ? '' : 'S'}`;
-
             // ── CONTINUOUS KNUCKLE FLEXION PROPORTIONAL MAPPING ───────────
             if (data.flexion !== undefined && handCount > 0) {
                 currentFlexion = data.flexion;
@@ -592,15 +279,7 @@ function connectWS() {
                 targetRadius = R0;
             }
 
-            // ── SNAP TRIGGER (Post-Pose from backend or audio fusion) ──────
-            const visionSnap = data.event === 'SNAP' || data.snap;
-            const audioSnap = cAudio >= 0.60;
-            const fusionSnap = audioSnap && visionSnap;
-
-            if ((visionSnap || fusionSnap) && (now - lastSnapTriggerTime) > 2.0) {
-                lastSnapTriggerTime = now;
-                triggerSnapEffect();
-            }
+            
 
             // Trigger Supernova Cosmic Particle Burst
             if (data.bloom || data.state === 'BLOOM') {
@@ -849,8 +528,6 @@ function render() {
     time += 0.015 * speedMult;
 
     updateAudioEnergy();
-    updateBlipFX(nowSec);
-
     // Continuous Proportional Smooth Radius (0.15 easing)
     smoothRadius += (targetRadius - smoothRadius) * 0.15;
 
@@ -877,13 +554,6 @@ function render() {
     angularVelX *= 0.95;
     angularVelY *= 0.95;
     angularVelZ *= 0.95;
-
-    // Skip drawing primary canvas if fully disintegrated into FX canvas
-    if (isDisintegrated && !blipAnimationActive) {
-        ctx.clearRect(0, 0, width, height);
-        return;
-    }
-
     // ── 3D Supernova Cosmic Burst & 3-Phase Gravitational Reassembly ────
     let burstTotalElapsed = 0.0;
     let inBurstPhase = false;

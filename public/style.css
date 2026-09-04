@@ -71,11 +71,7 @@ body, html {
     padding: 2.2rem 2.8rem;
 }
 
-.hud-top, .hud-bottom {
-    pointer-events: auto;
-}
-
-.hud-top {
+.hud-top, .hud-top {
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -153,23 +149,6 @@ body, html {
     transform: rotate(45deg);
     background: var(--text);
     color: var(--bg);
-}
-
-.hud-bottom {
-    display: flex;
-    justify-content: center;
-}
-
-.minimal-pill {
-    font-size: 0.72rem;
-    font-weight: 600;
-    letter-spacing: 1.5px;
-    color: var(--text-dim);
-    background: var(--hud-bg);
-    padding: 0.45rem 1.25rem;
-    border-radius: 30px;
-    border: 1px solid var(--border);
-    backdrop-filter: blur(16px);
 }
 
 /* Floating Action Button (Bottom-Right) */
@@ -515,35 +494,18 @@ body, html {
     color: var(--text);
 }
 
-/* Horizontal Scroll Container */
+/* Gesture Manual: No-Scrollbar Flex Container */
 .manual-scroll-container {
     display: flex;
-    overflow-x: auto;
-    gap: 16px;
-    padding: 4px 4px 12px 4px;
-    scroll-snap-type: x mandatory;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: thin;
-    scrollbar-color: var(--text-dim) transparent;
-}
-
-.manual-scroll-container::-webkit-scrollbar {
-    height: 4px;
-}
-
-.manual-scroll-container::-webkit-scrollbar-track {
-    background: transparent;
-}
-
-.manual-scroll-container::-webkit-scrollbar-thumb {
-    background: var(--text-dim);
-    border-radius: 9999px;
+    justify-content: space-between;
+    overflow: hidden;
+    gap: 8px;
+    padding: 4px 4px 8px 4px;
 }
 
 /* Gesture Tiles: Thinner Portrait Cards, No Icons, Uniform Style */
 .gesture-tile {
-    width: 160px;
-    min-width: 160px;
+    flex: 1;
     height: 240px;
     background: var(--card-bg);
     border: 1px solid var(--border);
@@ -553,10 +515,8 @@ body, html {
     flex-direction: column;
     justify-content: flex-end;
     gap: 0.35rem;
-    scroll-snap-align: start;
     transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), background 0.2s, border-color 0.2s, box-shadow 0.25s;
-    flex-shrink: 0;
-}
+    }
 
 .gesture-tile:hover {
     transform: translateY(-4px);
@@ -592,23 +552,3 @@ body, html {
     margin: 0;
 }
 
-/* Full-Screen Avengers Disintegration & Materialization FX Canvas */
-#fx-canvas {
-    pointer-events: none;
-    position: fixed;
-    inset: 0;
-    z-index: 9999;
-    width: 100vw;
-    height: 100vh;
-}
-
-/* Seamless DOM Disintegration Transition */
-.hud.disintegrated,
-#ascii-canvas.disintegrated,
-.settings-drawer.disintegrated,
-.sensor-hud.disintegrated,
-.gesture-manual-overlay.disintegrated {
-    opacity: 0 !important;
-    pointer-events: none !important;
-    transition: opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-}
