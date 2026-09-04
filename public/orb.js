@@ -1,7 +1,5 @@
 const canvas = document.getElementById('ascii-canvas');
 const ctx = canvas.getContext('2d');
-const fxCanvas = document.getElementById('fx-canvas');
-const fxCtx = fxCanvas.getContext('2d');
 
 const wsStatus = document.getElementById('ws-status');
 const hudElement = document.querySelector('.hud');
@@ -256,7 +254,7 @@ function connectWS() {
     const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
 
     ws.onopen = () => {
-        wsStatus.innerText = 'ONLINE';
+        if (wsStatus) wsStatus.innerText = 'ONLINE';
     };
 
     ws.onmessage = (e) => {
@@ -371,7 +369,7 @@ function connectWS() {
     };
 
     ws.onclose = () => {
-        wsStatus.innerText = 'OFFLINE';
+        if (wsStatus) wsStatus.innerText = 'OFFLINE';
         setTimeout(connectWS, 1500);
     };
 }
