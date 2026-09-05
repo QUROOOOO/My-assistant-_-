@@ -625,7 +625,7 @@ class GestureEngine:
                 if self.live_feed_clients and target_loop and not target_loop.is_closed():
                     try:
                         asyncio.run_coroutine_threadsafe(self.broadcast_live_feed(jpeg_bytes), target_loop)
-                    except Exception:
+                    except (RuntimeError, Exception):
                         pass
 
         return frame
@@ -681,6 +681,8 @@ class GestureEngine:
 
                     self._frame_buffer.append(raw_frame)
                 except Exception as err:
+                    if not self.running:
+                        break
                     print(f"[PIPO Vision] Watchdog exception in ingestion loop: {err}. Releasing and reinitializing in 1s...")
                     if cap is not None:
                         try:
@@ -704,11 +706,13 @@ class GestureEngine:
                     if target_loop and not target_loop.is_closed():
                         try:
                             asyncio.run_coroutine_threadsafe(self.broadcast(), target_loop)
-                        except Exception:
+                        except (RuntimeError, Exception):
                             pass
                 else:
                     time.sleep(0.002)
             except Exception as e:
+                if not self.running:
+                    break
                 print(f"[PIPO Vision] Frame processing error: {e}")
                 time.sleep(0.01)
 
