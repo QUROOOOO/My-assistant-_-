@@ -34,8 +34,69 @@ def ensure_model():
         print("[PIPO Vision] Model ready.")
 
 
+def compute_vector_curl(pts):
+    """
+    Occlusion-Proof Fist Detection:
+    Replace distance-to-wrist formulas with 3D joint angle and palm normal vector checks.
+    A finger is curled if the Y-coordinate of its Tip (Nodes 8, 12, 16, 20) is closer
+    to the Wrist (Node 0) than its corresponding PIP joint (Nodes 6, 10, 14, 18) when
+    projected along the palm normal vector into the longitudinal palm coordinate frame.
+    Continuously maps this average vector curl to E_avg (1.0 = open, 0.0 = tight fist).
+    """
+    wrist = pts[0]
+    middle_mcp = pts[9]
+    index_mcp = pts[5]
+    pinky_mcp = pts[17]
+
+    v1 = middle_mcp - wrist
+    v2 = pinky_mcp - index_mcp
+    normal = np.cross(v1, v2)
+    n_len = np.linalg.norm(normal)
+    normal = normal / n_len if n_len > 1e-6 else np.array([0.0, 0.0, 1.0], dtype=np.float32)
+
+    l_ref = max(float(np.linalg.norm(v1)), 1e-6)
+    u_y = v1 / l_ref  # longitudinal unit vector pointing toward fingers
+
+    finger_pairs = [
+        (8, 6),   # Index Tip & PIP
+        (12, 10), # Middle Tip & PIP
+        (16, 14), # Ring Tip & PIP
+        (20, 18), # Pinky Tip & PIP
+    ]
+
+    curls = []
+    curled_flags = []
+
+    for tip_idx, pip_idx in finger_pairs:
+        tip = pts[tip_idx]
+        pip = pts[pip_idx]
+
+        # Project along palm normal into palm plane, then measure along longitudinal Y axis
+        # y = dot(P - wrist, u_y)
+        y_tip = float(np.dot(tip - wrist, u_y))
+        y_pip = float(np.dot(pip - wrist, u_y))
+
+        # A finger is curled if Tip is closer to Wrist than PIP
+        is_curled = bool(y_tip < y_pip)
+        curled_flags.append(is_curled)
+
+        # Continuous extension metric:
+        # Fully open: diff ~ 0.5 to 0.7 L_ref -> E ~ 1.0
+        # Fully tight fist: diff ~ -0.2 to -0.4 L_ref -> E ~ 0.0
+        diff = (y_tip - y_pip) / l_ref
+        e = float(np.clip((diff + 0.30) / 0.90, 0.0, 1.0))
+        curls.append(e)
+
+    e_avg = float(np.mean(curls))
+    all_curled = all(curled_flags)
+    is_fist = bool(all_curled or e_avg <= 0.25)
+    is_open = bool(all(not c for c in curled_flags) and e_avg >= 0.70)
+
+    return e_avg, is_fist, is_open, curled_flags
+
+
 # ---------------------------------------------------------------------------
-# Per-Hand Tracked State with Post-Pose Delta Snap & Continuous Fist/Bloom
+# Per-Hand Tracked State with Kinematic Vector Tracking
 # ---------------------------------------------------------------------------
 class HandState:
     def __init__(self, raw_cx, raw_cy, raw_depth, raw_pinch, pinch_pos, label, raw_flexion, now):
@@ -65,26 +126,27 @@ class HandState:
 
         self.is_pinching = bool(raw_pinch < GestureArbitrator.PINCH_ENTER_RATIO)
         self.label = str(label)
-        self.is_open = bool(raw_flexion >= GestureArbitrator.FIST_OPEN_THRESHOLD)
-        self.is_fist = False
+        self.is_open = bool(raw_flexion >= 0.70)
+        self.is_fist = bool(raw_flexion <= 0.25)
 
-        # ── Continuous Flexion Tracking & Bloom ─────────────────────────
+        # Continuous Flexion Tracking & Bloom
         self.flexion_history = collections.deque(maxlen=20)
         self.flexion_history.append((now, self.flexion))
         self.bloom_triggered = False
 
-        # ── Fist Hysteresis State for Bloom ─────────────────────────────
+        # Fist Hysteresis State for Bloom Gating
         self.fist_entered_time = 0.0
         self.fist_latched = False
-# 3D Palm Normal Euler angles
+        self._open_frame_counter = 0
+
+        # 3D Palm Normal Euler angles
         self.pitch = 0.0
         self.yaw = 0.0
         self.roll = 0.0
 
     def update(self, raw_cx, raw_cy, raw_depth, raw_pinch, pinch_pos, label,
-               norm_tip_dists, pts, safe_l_ref, dt, now,
+               e_avg, is_curled_fist, pts, safe_l_ref, dt, now,
                pitch=0.0, yaw=0.0, roll=0.0):
-        # ── Zero-Drift Deadband (< 0.03) ─────────────────────────────────
         raw_vx = (raw_cx - self.prev_raw_x) / max(dt, 0.001)
         raw_vy = (raw_cy - self.prev_raw_y) / max(dt, 0.001)
         raw_speed = math.sqrt(raw_vx**2 + raw_vy**2)
@@ -110,86 +172,83 @@ class HandState:
         self.pinch_x = float(self.filters["pinch_x"](pinch_pos[0], now))
         self.pinch_y = float(self.filters["pinch_y"](pinch_pos[1], now))
 
-        # ── Continuous Knuckle Extension Telemetry (1€ Filtered) ─────────
-        raw_flexion = float(np.mean(norm_tip_dists))
-        self.flexion = float(self.filters["flexion"](raw_flexion, now))
+        # Continuous Knuckle Extension Telemetry (1€ Filtered E_avg: 1.0 = open, 0.0 = tight fist)
+        self.flexion = float(self.filters["flexion"](e_avg, now))
         self.flexion_history.append((now, self.flexion))
 
         while len(self.flexion_history) > 1 and (now - self.flexion_history[0][0]) > 0.400:
             self.flexion_history.popleft()
 
-        self.is_open = bool(self.flexion >= 1.15)
+        self.is_open = bool(self.flexion >= 0.70)
+        self.is_fist = bool(is_curled_fist or self.flexion <= 0.25)
 
-        # ── Fist Recognition: all 4 fingertips < 1.1 * L_ref from wrist ──
-        all_tips_close = all(d < GestureArbitrator.FIST_FINGERTIP_THRESHOLD for d in norm_tip_dists)
-        self.is_fist = all_tips_close
-
-        # ── Strict Fist Hysteresis for Bloom Gating ─────────────────────
+        # Strict Fist Hysteresis for Bloom Gating
         self.bloom_triggered = False
 
-        if all_tips_close:
-            # Fist detected: latch immediately, reset open-frame counter
+        if self.is_fist:
             if not self.fist_latched:
                 self.fist_latched = True
                 self.fist_entered_time = now
-            self._open_frame_counter = 0  # Reset hysteresis counter
+            self._open_frame_counter = 0
         else:
-            # Hand NOT in fist: require 3 consecutive open frames before unlatching
-            if not hasattr(self, '_open_frame_counter'):
-                self._open_frame_counter = 0
             self._open_frame_counter += 1
-
             if self.fist_latched:
                 if self._open_frame_counter >= 3:
-                    # Only now check for BLOOM and unlatch
                     fist_hold_duration = now - self.fist_entered_time
-                    all_extended = all(d > GestureArbitrator.BLOOM_OPEN_THRESHOLD for d in norm_tip_dists)
+                    if fist_hold_duration >= GestureArbitrator.BLOOM_FIST_HOLD_MS and self.is_open:
+                        self.bloom_triggered = True
+                        self.fist_latched = False
+                        self.fist_entered_time = 0.0
+                    elif self._open_frame_counter > 8:
+                        self.fist_latched = False
 
-                    if fist_hold_duration >= GestureArbitrator.BLOOM_FIST_HOLD_MS and all_extended:
-                        # Measure expansion velocity from flexion history
-                        min_flex_in_window = min(f for t, f in self.flexion_history) if self.flexion_history else 1.0
-                        if min_flex_in_window <= GestureArbitrator.FIST_TIGHT_THRESHOLD:
-                            self.bloom_triggered = True
-                            self.flexion_history.clear()
+        self.pitch = pitch
+        self.yaw = yaw
+        self.roll = roll
 
-                    self.fist_latched = False
-                    self.fist_entered_time = 0.0
-                # else: still within hysteresis window — stay latched as COMPRESS
-        self.label = str(label)
-        self.pitch = float(pitch)
-        self.yaw = float(yaw)
-        self.roll = float(roll)
-
-        if self.is_pinching:
-            if self.pinch > GestureArbitrator.PINCH_EXIT_RATIO:
-                self.is_pinching = False
-        else:
-            if self.pinch < GestureArbitrator.PINCH_ENTER_RATIO:
-                self.is_pinching = True
+        if self.pinch < GestureArbitrator.PINCH_ENTER_RATIO:
+            self.is_pinching = True
+        elif self.pinch > GestureArbitrator.PINCH_EXIT_RATIO:
+            self.is_pinching = False
 
 
 class GestureEngine:
+    min_detection_confidence = 0.75
+    min_tracking_confidence = 0.85
+    min_hand_detection_confidence = 0.75
+    min_hand_presence_confidence = 0.85
+
     def __init__(self):
         ensure_model()
         self.connected_clients = set()
         self.live_feed_clients = set()
 
+        # MediaPipe Hardening: min_detection_confidence=0.75, min_tracking_confidence=0.85
+        self.min_detection_confidence = 0.75
+        self.min_tracking_confidence = 0.85
+        self.min_hand_detection_confidence = 0.75
+        self.min_hand_presence_confidence = 0.85
+
         base_options = mp_python.BaseOptions(model_asset_path=MODEL_PATH)
         options = vision.HandLandmarkerOptions(
             base_options=base_options,
             num_hands=2,
-            min_hand_detection_confidence=0.40,
-            min_hand_presence_confidence=0.40,
-            min_tracking_confidence=0.40
+            min_hand_detection_confidence=0.75,
+            min_hand_presence_confidence=0.85,
+            min_tracking_confidence=0.85
         )
         self.detector = vision.HandLandmarker.create_from_options(options)
         self.running = True
-        self._missing_frames = 0
-        self._last_known_landmarks = None  # Persist last valid landmarks for up to 4 frames
+
+        # Pre-Kinematic Rolling EMA Smoothing Dictionary for all 21 joint coordinates
+        self.ema_landmarks = {}
+
+        # Anti-Glitch Coasting Buffer (5 frames temporal persistence)
+        self.coasting_frames = {}
+        self.last_valid_pts = {}
 
         # Handedness-keyed tracking dictionaries
         self.hand_states = {}
-        self.persistence_counters = {}
 
         # Dual-hand 1€ filters
         self.dual_dist_filter = OneEuroFilter(min_cutoff=1.2, beta=0.006)
@@ -205,13 +264,11 @@ class GestureEngine:
 
         # Dedicated Ingestion Thread Buffer (maxlen=1)
         self._frame_buffer = collections.deque(maxlen=1)
-
-        # Global Snap Cooldown Refractory Timer (2.0s)
         self.last_frame_time = time.time()
         self.latest_state = {
             "hands": [],
             "state": "IDLE",
-            "flexion": 1.4,
+            "flexion": 1.0,
             "two_hand_dist": 0.0,
             "dual_angle": 0.0,
             "dual_pinch": False,
@@ -219,54 +276,47 @@ class GestureEngine:
             "grab_hand": None,
             "bloom": False,
             "compress": False,
-            "snap": False,
-            "event": None,
             "slap_impulse": {"active": False, "vx": 0.0, "vy": 0.0}
         }
 
-    async def register(self, ws):
+    def register_client(self, ws):
         self.connected_clients.add(ws)
-        try:
-            while True:
-                await ws.receive_text()
-        except Exception:
-            pass
-        finally:
-            self.connected_clients.discard(ws)
 
-    async def register_live_feed(self, ws):
+    def unregister_client(self, ws):
+        self.connected_clients.discard(ws)
+
+    def register_live_feed_client(self, ws):
         self.live_feed_clients.add(ws)
-        try:
-            while True:
-                await ws.receive_text()
-        except Exception:
-            pass
-        finally:
-            self.live_feed_clients.discard(ws)
+
+    def unregister_live_feed_client(self, ws):
+        self.live_feed_clients.discard(ws)
 
     async def broadcast(self):
-        if self.connected_clients:
-            msg = json.dumps(self.latest_state)
-            dead = set()
-            for client in list(self.connected_clients):
-                try:
-                    await client.send_text(msg)
-                except Exception:
-                    dead.add(client)
-            self.connected_clients -= dead
+        if not self.connected_clients:
+            return
+        payload = json.dumps(self.latest_state)
+        dead = []
+        for ws in self.connected_clients:
+            try:
+                await ws.send_text(payload)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.connected_clients.discard(ws)
 
-    async def broadcast_live_feed(self, jpeg_bytes):
-        if self.live_feed_clients:
-            dead = set()
-            for ws in list(self.live_feed_clients):
-                try:
-                    await ws.send_bytes(jpeg_bytes)
-                except Exception:
-                    dead.add(ws)
-            self.live_feed_clients -= dead
+    async def broadcast_live_feed(self, jpeg_bytes: bytes):
+        if not self.live_feed_clients:
+            return
+        dead = []
+        for ws in self.live_feed_clients:
+            try:
+                await ws.send_bytes(jpeg_bytes)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.live_feed_clients.discard(ws)
 
-    async def generate_mjpeg_stream(self):
-        """Asynchronous non-blocking MJPEG generator."""
+    async def generate_mjpeg(self):
         self.stream_viewers += 1
         last_sent = None
         try:
@@ -301,38 +351,63 @@ class GestureEngine:
         slap_active = False
         slap_vx, slap_vy = 0.0, 0.0
         global_bloom = False
-        min_flexion = 1.4
+        min_flexion = 1.0
 
-        detected_labels = set()
+        # Active hands dictionary for this frame (label -> smoothed_pts)
+        active_landmarks_dict = {}
 
-        # ── Landmark Persistence: reuse last known for up to 4 missing frames ──
-        active_landmarks = res.hand_landmarks
-        if active_landmarks:
-            self._last_known_landmarks = active_landmarks
-            self._missing_frames = 0
-        else:
-            self._missing_frames += 1
-            if self._missing_frames <= 4 and self._last_known_landmarks is not None:
-                active_landmarks = self._last_known_landmarks
-            else:
-                active_landmarks = []
-
-        if active_landmarks:
-            for idx, lms in enumerate(active_landmarks):
+        # 1. Inspect MediaPipe detections with confidence check and Pre-Kinematic EMA
+        if res.hand_landmarks:
+            for idx, lms in enumerate(res.hand_landmarks):
                 label = "Right"
-                if res.handedness and idx < len(res.handedness):
+                score = 1.0
+                if res.handedness and idx < len(res.handedness) and len(res.handedness[idx]) > 0:
                     label = res.handedness[idx][0].category_name
+                    score = float(res.handedness[idx][0].score)
 
-                if label in detected_labels:
+                if label in active_landmarks_dict:
                     label = f"{label}_2"
 
-                detected_labels.add(label)
-                self.persistence_counters[label] = 4
+                raw_pts = np.array([[lm.x, lm.y, lm.z] for lm in lms], dtype=np.float32)
 
-                # ── Vectorized NumPy Landmark Array Conversion ───────────
-                pts = np.array([[lm.x, lm.y, lm.z] for lm in lms], dtype=np.float32)
+                # MediaPipe Hardening Check (0.85 confidence threshold)
+                if score >= 0.85:
+                    # Pre-Kinematic EMA Smoothing: smoothed = (raw * 0.4) + (previous * 0.6)
+                    if label in self.ema_landmarks:
+                        smoothed = (raw_pts * 0.4) + (self.ema_landmarks[label] * 0.6)
+                    else:
+                        smoothed = raw_pts.copy()
 
-                # ── Render 21-Node Skeletal Mesh on Frame ────────────────
+                    self.ema_landmarks[label] = smoothed
+                    self.last_valid_pts[label] = smoothed.copy()
+                    self.coasting_frames[label] = 0
+                    active_landmarks_dict[label] = smoothed
+                else:
+                    # Tracker confidence dropped below 0.85: coast using previous frame's smoothed vectors
+                    coast_cnt = self.coasting_frames.get(label, 0) + 1
+                    self.coasting_frames[label] = coast_cnt
+                    if coast_cnt <= 5 and label in self.last_valid_pts:
+                        active_landmarks_dict[label] = self.last_valid_pts[label]
+
+        # 2. Anti-Glitch Coasting: check previously tracked hands missed in this frame
+        for prev_label in list(self.last_valid_pts.keys()):
+            if prev_label not in active_landmarks_dict:
+                coast_cnt = self.coasting_frames.get(prev_label, 0) + 1
+                self.coasting_frames[prev_label] = coast_cnt
+                if coast_cnt <= 5:
+                    # Coast using previous frame's smoothed vectors (up to 5 frames)
+                    active_landmarks_dict[prev_label] = self.last_valid_pts[prev_label]
+                else:
+                    # Exceeded 5 frames: disconnect hand
+                    self.coasting_frames.pop(prev_label, None)
+                    self.last_valid_pts.pop(prev_label, None)
+                    self.ema_landmarks.pop(prev_label, None)
+                    self.hand_states.pop(prev_label, None)
+
+        # 3. Process kinematics for all active (detected + coasting) hands
+        if active_landmarks_dict:
+            for label, pts in active_landmarks_dict.items():
+                # Render 21-Node Skeletal Mesh on Frame
                 pts_2d = (pts[:, :2] * np.array([w, h], dtype=np.float32)).astype(np.int32)
                 for start_idx, end_idx in HAND_CONNECTIONS:
                     cv2.line(frame, tuple(pts_2d[start_idx]), tuple(pts_2d[end_idx]), (255, 255, 0), 2, cv2.LINE_AA)
@@ -343,7 +418,7 @@ class GestureEngine:
                 wrist_pt = (pts_2d[0][0], pts_2d[0][1] + 20)
                 cv2.putText(frame, label.upper(), wrist_pt, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
 
-                # ── Geometric Scale-Invariant Heuristics (L_ref metric) ──
+                # Geometric Scale-Invariant Landmarks
                 wrist = pts[0]
                 middle_mcp = pts[9]
                 index_mcp = pts[5]
@@ -364,13 +439,10 @@ class GestureEngine:
                 pinch_center = (float((thumb_tip[0] + index_tip[0]) / 2.0),
                                 float((thumb_tip[1] + index_tip[1]) / 2.0))
 
-                # 4 Fingertips: 8 (Index), 12 (Middle), 16 (Ring), 20 (Pinky)
-                four_tips = pts[[8, 12, 16, 20]]
-                dists_to_wrist = np.linalg.norm(four_tips - wrist, axis=1)
-                norm_tip_dists = dists_to_wrist / safe_l_ref
-                raw_flexion = float(np.mean(norm_tip_dists))
+                # Occlusion-Proof Fist & Extension via Palm Normal Projection
+                e_avg, is_curled_fist, is_open_hand, curled_flags = compute_vector_curl(pts)
 
-                # 3D Palm Euler Vectorization
+                # 3D Palm Euler Angles
                 v1 = middle_mcp - wrist
                 v2 = pinky_mcp - index_mcp
                 normal = np.cross(v1, v2)
@@ -381,11 +453,11 @@ class GestureEngine:
                 yaw   = float(math.atan2(normal[0], normal[2]))
                 roll  = float(math.atan2(v2[1], math.sqrt(v2[0]**2 + v2[2]**2)))
 
-                # ── Handedness-Keyed Update with Post-Pose Snap & Fist ──
+                # Update or Instantiate HandState
                 if label not in self.hand_states:
                     self.hand_states[label] = HandState(
                         raw_cx, raw_cy, raw_depth, pinch_ratio, pinch_center,
-                        label, raw_flexion, now
+                        label, e_avg, now
                     )
                     self.hand_states[label].pitch = pitch
                     self.hand_states[label].yaw = yaw
@@ -393,7 +465,7 @@ class GestureEngine:
                 else:
                     self.hand_states[label].update(
                         raw_cx, raw_cy, raw_depth, pinch_ratio, pinch_center,
-                        label, norm_tip_dists, pts, safe_l_ref, dt, now,
+                        label, e_avg, is_curled_fist, pts, safe_l_ref, dt, now,
                         pitch=pitch, yaw=yaw, roll=roll
                     )
 
@@ -410,15 +482,11 @@ class GestureEngine:
 
                 if sm.flexion < min_flexion:
                     min_flexion = sm.flexion
-        # ── Persistence Cleanup ──────────────────────────────────────────
-        all_tracked = list(self.hand_states.keys())
-        for label in all_tracked:
-            if label not in detected_labels:
-                cnt = self.persistence_counters.get(label, 0) - 1
-                self.persistence_counters[label] = cnt
-                if cnt <= 0:
-                    del self.hand_states[label]
-                    self.persistence_counters.pop(label, None)
+
+        # Clean up any hand states not in active_landmarks_dict
+        for label in list(self.hand_states.keys()):
+            if label not in active_landmarks_dict:
+                del self.hand_states[label]
 
         # ── Hands Telemetry Payload Construction ─────────────────────────
         for label, sm in self.hand_states.items():
@@ -490,7 +558,7 @@ class GestureEngine:
             state = GestureArbitrator.STATE_DUAL_PINCH
         elif grab_hand is not None:
             state = GestureArbitrator.STATE_GRAB
-        elif min_flexion <= 0.65:
+        elif min_flexion <= 0.35:
             state = GestureArbitrator.STATE_COMPRESS
         elif slap_active:
             state = GestureArbitrator.STATE_SWIPE
@@ -507,11 +575,11 @@ class GestureEngine:
             "dual_pinch_center": dual_pinch_center,
             "grab_hand": grab_hand,
             "bloom": global_bloom,
-            "compress": bool(min_flexion <= 0.65),
+            "compress": bool(min_flexion <= 0.35),
             "slap_impulse": {"active": slap_active, "vx": slap_vx, "vy": slap_vy}
         }
 
-        # ── True 60 FPS Binary Frame Push (480x270 @ Quality 60) ────────
+        # ── True 60 FPS Binary Frame Push (640x360 @ Quality 85) ────────
         if len(self.live_feed_clients) > 0 or self.stream_viewers > 0:
             preview = cv2.resize(frame, (640, 360), interpolation=cv2.INTER_LINEAR)
             ret, jpeg = cv2.imencode('.jpg', preview, [cv2.IMWRITE_JPEG_QUALITY, 85])

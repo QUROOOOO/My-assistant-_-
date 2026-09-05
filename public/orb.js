@@ -154,10 +154,10 @@ let angularVelX = 0, angularVelY = 0, angularVelZ = 0;
 let currentScale = 1.0;
 let targetScale = 1.0;
 
-// Continuous Proportional Radius (1.2 open -> R0, 0.5 closed -> 0.35 * R0)
+// Continuous Proportional Radius
 let targetRadius = R0;
 let smoothRadius = R0;
-let currentFlexion = 1.4;
+let currentFlexion = 1.0;
 
 let gestureState = 'IDLE'; // IDLE | HOVER | GRAB | DUAL_PINCH | COMPRESS | BLOOM | SWIPE
 let anchorDualDist = 0.0;
@@ -184,7 +184,7 @@ let audioMode = 'both';
 let hasHands = false;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 3. HIGH-RESOLUTION FFT AUDIO REACTIVITY (AUTOPLAY POLICY COMPLIANT)
+// 3. HIGH-RESOLUTION FFT AUDIO ENGINE (SMOOTH STATIC DECAY)
 // ═══════════════════════════════════════════════════════════════════════════
 const FFT_SIZE = 1024;
 const BIN_COUNT = FFT_SIZE / 2; // 512 bins
@@ -195,7 +195,7 @@ let micSource = null;
 let audioFreqData = new Uint8Array(BIN_COUNT);
 let audioFreqSmoothed = new Float32Array(BIN_COUNT);
 let smoothAudio = 0.0;
-let audioRequested = false;
+let audioEnergy = 0.0;
 
 function initAudio() {
     if (audioCtx) {
@@ -242,8 +242,27 @@ window.addEventListener('touchstart', triggerAudioInit, { once: true });
 window.addEventListener('keydown', triggerAudioInit, { once: true });
 
 function updateAudio() {
-    if (!analyser || !audioFreqData || !audioFreqSmoothed || audioMode === 'off') {
-        smoothAudio = 0.0;
+    // When audio mode is static ('off'), actively decay all displacements to 0
+    if (audioMode === 'off') {
+        smoothAudio += (0.0 - smoothAudio) * 0.05;
+        if (Math.abs(smoothAudio) < 0.0001) smoothAudio = 0.0;
+        audioEnergy = smoothAudio;
+
+        for (let k = 0; k < FLARE_COUNT; k++) {
+            flareEnergies[k] += (0.0 - flareEnergies[k]) * 0.05;
+            if (flareEnergies[k] < 0.0001) flareEnergies[k] = 0.0;
+        }
+        if (audioFreqSmoothed) {
+            for (let b = 0; b < BIN_COUNT; b++) {
+                audioFreqSmoothed[b] += (0.0 - audioFreqSmoothed[b]) * 0.05;
+            }
+        }
+        return;
+    }
+
+    if (!analyser || !audioFreqData || !audioFreqSmoothed) {
+        smoothAudio += (0.0 - smoothAudio) * 0.05;
+        audioEnergy = smoothAudio;
         return;
     }
 
@@ -264,6 +283,7 @@ function updateAudio() {
 
         const avgEnergy = totalEnergy / BIN_COUNT;
         smoothAudio = avgEnergy * sensitivity * 2.2;
+        audioEnergy = smoothAudio;
 
         // Map FFT bins directly onto the 1400-node Fibonacci sphere by latitude/index
         const binsPerNode = BIN_COUNT / POINT_COUNT;
@@ -314,15 +334,16 @@ function connectWS() {
             const now = performance.now() / 1000;
 
             // ── CONTINUOUS KNUCKLE FLEXION PROPORTIONAL MAPPING ───────────
+            // 1.0 = open hand, 0.0 = tight fist
             if (data.flexion !== undefined && handCount > 0) {
                 currentFlexion = data.flexion;
                 let factor = 1.0;
-                if (currentFlexion <= 0.50) {
-                    factor = 0.35;
-                } else if (currentFlexion < 1.20) {
+                if (currentFlexion <= 1.0) {
+                    factor = 0.35 + Math.max(0.0, Math.min(1.0, currentFlexion)) * (1.0 - 0.35);
+                } else {
                     factor = 0.35 + ((currentFlexion - 0.50) / (1.20 - 0.50)) * (1.0 - 0.35);
                 }
-                targetRadius = R0 * factor;
+                targetRadius = R0 * Math.max(0.35, Math.min(1.5, factor));
             } else if (handCount === 0) {
                 targetRadius = R0;
             }
@@ -376,7 +397,7 @@ function connectWS() {
                     targetScale = Math.min(Math.max(anchorGrabScale * depthRatio * 0.85, 0.35), 2.2);
                 }
                 // ── STATE 3: CONTINUOUS FIST CONDENSATION (COMPRESS) ────────
-                else if (data.state === 'COMPRESS' || data.compress || currentFlexion < 0.80) {
+                else if (data.state === 'COMPRESS' || data.compress || currentFlexion < 0.40) {
                     gestureState = 'COMPRESS';
                     const primary = data.hands[0];
                     targetRotY = (primary.palm_x - 0.5) * 1.3;
@@ -582,7 +603,7 @@ if (speedSlider) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 7. HIGH-PERFORMANCE DEFENSIVE RENDER LOOP
+// 7. HIGH-PERFORMANCE DEFENSIVE RENDER LOOP WITH STATIC AUDIO DECAY
 // ═══════════════════════════════════════════════════════════════════════════
 let time = 0;
 
@@ -597,6 +618,15 @@ function render() {
         time += 0.015 * speedMult;
 
         updateAudioEnergy();
+
+        // Active smooth decay when audio reactivity is disabled ('Static Matrix')
+        if (audioMode === 'off') {
+            audioEnergy += (0.0 - audioEnergy) * 0.05;
+            smoothAudio += (0.0 - smoothAudio) * 0.05;
+            for (let k = 0; k < FLARE_COUNT; k++) {
+                flareEnergies[k] += (0.0 - flareEnergies[k]) * 0.05;
+            }
+        }
 
         // Continuous Proportional Smooth Radius (0.15 easing)
         smoothRadius += (targetRadius - smoothRadius) * 0.15;
@@ -713,10 +743,10 @@ function render() {
             } else {
                 const idleWave = 0.010 * Math.sin(2.0 * theta + 3.0 * phi + time);
 
-                // 16 Localized Solar Flares
+                // 16 Localized Solar Flares with dynamic smooth decay
                 let flareSum = 0.0;
                 for (let k = 0; k < FLARE_COUNT; k++) {
-                    if (flareEnergies[k] > 0.005) {
+                    if (flareEnergies[k] > 0.001) {
                         const dx = nx - flareAx[k];
                         const dy = ny - flareAy[k];
                         const dz = nz - flareAz[k];

@@ -71,7 +71,7 @@
 
         <div class="settings-group">
             <label>Feel</label>
-            <div class="segmented-group">
+            <div class="segmented-control segmented-group">
                 <button class="segmented-btn active" data-theme="dark">Pure Black</button>
                 <button class="segmented-btn" data-theme="light">Pure White</button>
             </div>
@@ -79,7 +79,7 @@
 
         <div class="settings-group">
             <label>Thump</label>
-            <div class="segmented-group">
+            <div class="segmented-control segmented-group">
                 <button class="segmented-btn active" data-audio-mode="both">Full Reactivity</button>
                 <button class="segmented-btn" data-audio-mode="off">Static Matrix</button>
             </div>
@@ -90,7 +90,7 @@
                 <label>Audio Sensitivity</label>
                 <span class="slider-val" id="sens-val">1.5x</span>
             </div>
-            <input type="range" class="capsule-slider" id="sens-slider" min="0.2" max="3.5" step="0.1" value="1.5">
+            <input type="range" class="capsule-slider slider-track" id="sens-slider" min="0.2" max="3.5" step="0.1" value="1.5">
         </div>
 
         <div class="settings-group">
@@ -98,7 +98,7 @@
                 <label>Rotational Damping</label>
                 <span class="slider-val" id="speed-val">1.0x</span>
             </div>
-            <input type="range" class="capsule-slider" id="speed-slider" min="0.2" max="2.5" step="0.1" value="1.0">
+            <input type="range" class="capsule-slider slider-track" id="speed-slider" min="0.2" max="2.5" step="0.1" value="1.0">
         </div>
     </div>
 
@@ -118,34 +118,34 @@
             <!-- Horizontal Scroll Container with Portrait Tiles -->
             <div class="manual-scroll-container">
                 <!-- Tile 1: Hover -->
-                <div class="gesture-tile">
+                <div class="manual-card gesture-tile">
                     <span class="tile-tag">3D PARALLAX</span>
                     <h4 class="tile-title">HOVER</h4>
                     <p class="tile-desc">Open palm tilts the orb in 3D space with magnetic parallax tracking</p>
                 </div>
 
                 <!-- Tile 2: Pinch Zoom -->
-                <div class="gesture-tile">
+                <div class="manual-card gesture-tile">
                     <span class="tile-tag">DUAL HAND</span>
                     <h4 class="tile-title">PINCH ZOOM</h4>
                     <p class="tile-desc">Two-hand pinch scales the orb up and down with proportional depth</p>
                 </div>
 
                 <!-- Tile 3: Plasma Fist -->
-                <div class="gesture-tile">
+                <div class="manual-card gesture-tile">
                     <span class="tile-tag">ENERGY CONDENSE</span>
                     <h4 class="tile-title">PLASMA FIST</h4>
                     <p class="tile-desc">Gradually clench hand to condense into a vibrating high-energy core</p>
                 </div>
 
                 <!-- Tile 4: Supernova Bloom -->
-                <div class="gesture-tile">
+                <div class="manual-card gesture-tile">
                     <span class="tile-tag">COSMIC EXPLOSION</span>
                     <h4 class="tile-title">SUPERNOVA</h4>
                     <p class="tile-desc">Explosive release from fist triggers an omnidirectional particle burst</p>
                 </div>
                 <!-- Tile 5: Swipe -->
-                <div class="gesture-tile">
+                <div class="manual-card gesture-tile">
                     <span class="tile-tag">KINETIC IMPULSE</span>
                     <h4 class="tile-title">SWIPE</h4>
                     <p class="tile-desc">Fast open-hand swipe applies angular momentum to the orb rotation</p>
