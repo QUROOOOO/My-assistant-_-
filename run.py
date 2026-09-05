@@ -1,5 +1,6 @@
 import atexit
 import asyncio
+from contextlib import asynccontextmanager
 import os
 import shutil
 import sys
@@ -13,29 +14,7 @@ from starlette.websockets import WebSocketDisconnect
 from starlette.middleware.base import BaseHTTPMiddleware
 from core.gesture_engine import GestureEngine
 
-app = FastAPI(title="PIPO ASCII Matrix")
-
-class NoCacheMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request, call_next):
-        response = await call_next(request)
-        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
-        return response
-
-app.add_middleware(NoCacheMiddleware)
-
 gesture_engine = GestureEngine()
-
-@app.on_event("startup")
-async def on_startup():
-    loop = asyncio.get_running_loop()
-    gesture_engine.set_server_loop(loop)
-    asyncio.create_task(keepalive_telemetry_loop())
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    gesture_engine.running = False
 
 async def keepalive_telemetry_loop():
     while gesture_engine.running:
@@ -46,6 +25,27 @@ async def keepalive_telemetry_loop():
         except Exception:
             pass
         await asyncio.sleep(0.033)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    loop = asyncio.get_running_loop()
+    gesture_engine.set_server_loop(loop)
+    keepalive_task = asyncio.create_task(keepalive_telemetry_loop())
+    yield
+    gesture_engine.running = False
+    keepalive_task.cancel()
+
+app = FastAPI(title="PIPO ASCII Matrix", lifespan=lifespan)
+
+class NoCacheMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
+
+app.add_middleware(NoCacheMiddleware)
 
 @app.websocket("/ws/telemetry")
 @app.websocket("/ws")
@@ -91,7 +91,10 @@ def cleanup_cache_on_exit():
 atexit.register(cleanup_cache_on_exit)
 
 def start_vision():
-    gesture_engine.run_capture()
+    try:
+        gesture_engine.run_capture()
+    except Exception as e:
+        print(f"[PIPO Vision] Capture exception: {e}", file=sys.stderr)
 
 if __name__ == "__main__":
     print("\n" + "="*55)
@@ -99,11 +102,16 @@ if __name__ == "__main__":
     print("="*55 + "\n")
 
     threading.Thread(target=start_vision, daemon=True).start()
-    threading.Timer(1.2, lambda: webbrowser.open("http://localhost:8000")).start()
+    threading.Timer(1.2, lambda: webbrowser.open("http://127.0.0.1:8000")).start()
 
     try:
-        uvicorn.run(app, host="localhost", port=8000, log_level="warning")
+        uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
     except (KeyboardInterrupt, SystemExit):
+        pass
+    except Exception as e:
+        print(f"[PIPO Server] Uvicorn fatal exception: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+    finally:
         gesture_engine.running = False
         cleanup_cache_on_exit()
-        sys.exit(0)
