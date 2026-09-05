@@ -319,12 +319,47 @@ function updateAudioEnergy() {
 // ═══════════════════════════════════════════════════════════════════════════
 // 4. CONTINUOUS GESTURE TELEMETRY & WEBSOCKET CLIENT
 // ═══════════════════════════════════════════════════════════════════════════
+let reconnectTimer = null;
+
 function connectWS() {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+    }
+
+    const ws = new WebSocket(`ws://${window.location.host}/ws/telemetry`);
 
     ws.onopen = () => {
-        if (wsStatus) wsStatus.innerText = 'ONLINE';
+        if (wsStatus) {
+            wsStatus.innerText = 'ONLINE';
+            wsStatus.style.color = '#ffffff';
+        }
+    };
+
+    ws.onerror = (err) => {
+        if (wsStatus) {
+            wsStatus.innerText = 'OFFLINE';
+            wsStatus.style.color = '#ff4444';
+        }
+        if (!reconnectTimer) {
+            reconnectTimer = setTimeout(() => {
+                reconnectTimer = null;
+                connectWS();
+            }, 2000);
+        }
+    };
+
+    ws.onclose = () => {
+        if (wsStatus) {
+            wsStatus.innerText = 'OFFLINE';
+            wsStatus.style.color = '#ff4444';
+        }
+        if (!reconnectTimer) {
+            reconnectTimer = setTimeout(() => {
+                reconnectTimer = null;
+                connectWS();
+            }, 2000);
+        }
     };
 
     ws.onmessage = (e) => {
@@ -435,11 +470,6 @@ function connectWS() {
         } catch (err) {
             console.error("Telemetry parse error:", err);
         }
-    };
-
-    ws.onclose = () => {
-        if (wsStatus) wsStatus.innerText = 'OFFLINE';
-        setTimeout(connectWS, 1500);
     };
 }
 connectWS();

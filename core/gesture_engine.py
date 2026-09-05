@@ -261,6 +261,8 @@ class GestureEngine:
         self.stream_viewers = 0
         self._jpeg_lock = threading.Lock()
         self._async_loop = None
+        self._server_loop = None
+        self.last_broadcast_time = time.time()
 
         # Dedicated Ingestion Thread Buffer (maxlen=1)
         self._frame_buffer = collections.deque(maxlen=1)
@@ -279,6 +281,13 @@ class GestureEngine:
             "slap_impulse": {"active": False, "vx": 0.0, "vy": 0.0}
         }
 
+    def set_server_loop(self, loop):
+        self._server_loop = loop
+
+    def get_latest_jpeg(self):
+        with self._jpeg_lock:
+            return self.latest_jpeg
+
     def register_client(self, ws):
         self.connected_clients.add(ws)
 
@@ -291,30 +300,53 @@ class GestureEngine:
     def unregister_live_feed_client(self, ws):
         self.live_feed_clients.discard(ws)
 
+    async def register(self, ws):
+        self.register_client(ws)
+        try:
+            payload = json.dumps(self.latest_state)
+            await ws.send_text(payload)
+            while self.running:
+                await ws.receive_text()
+        except Exception:
+            pass
+        finally:
+            self.unregister_client(ws)
+
+    async def register_live_feed(self, ws):
+        self.register_live_feed_client(ws)
+        try:
+            while self.running:
+                await ws.receive_text()
+        except Exception:
+            pass
+        finally:
+            self.unregister_live_feed_client(ws)
+
     async def broadcast(self):
+        self.last_broadcast_time = time.time()
         if not self.connected_clients:
             return
         payload = json.dumps(self.latest_state)
         dead = []
-        for ws in self.connected_clients:
+        for ws in list(self.connected_clients):
             try:
                 await ws.send_text(payload)
             except Exception:
                 dead.append(ws)
         for ws in dead:
-            self.connected_clients.discard(ws)
+            self.unregister_client(ws)
 
     async def broadcast_live_feed(self, jpeg_bytes: bytes):
         if not self.live_feed_clients:
             return
         dead = []
-        for ws in self.live_feed_clients:
+        for ws in list(self.live_feed_clients):
             try:
                 await ws.send_bytes(jpeg_bytes)
             except Exception:
                 dead.append(ws)
         for ws in dead:
-            self.live_feed_clients.discard(ws)
+            self.unregister_live_feed_client(ws)
 
     async def generate_mjpeg(self):
         self.stream_viewers += 1
@@ -336,6 +368,8 @@ class GestureEngine:
             pass
         finally:
             self.stream_viewers = max(0, self.stream_viewers - 1)
+
+    generate_mjpeg_stream = generate_mjpeg
 
     def process_frame(self, frame):
         now = time.time()
@@ -587,61 +621,99 @@ class GestureEngine:
                 jpeg_bytes = jpeg.tobytes()
                 with self._jpeg_lock:
                     self.latest_jpeg = jpeg_bytes
-                if self.live_feed_clients and self._async_loop and not self._async_loop.is_closed():
-                    asyncio.run_coroutine_threadsafe(self.broadcast_live_feed(jpeg_bytes), self._async_loop)
+                target_loop = self._server_loop or self._async_loop
+                if self.live_feed_clients and target_loop and not target_loop.is_closed():
+                    try:
+                        asyncio.run_coroutine_threadsafe(self.broadcast_live_feed(jpeg_bytes), target_loop)
+                    except Exception:
+                        pass
 
         return frame
 
-    def run_capture(self, loop):
-        self._async_loop = loop
+    def run_capture(self, loop=None):
+        if loop is not None:
+            self._async_loop = loop
 
         def open_camera():
-            cap = cv2.VideoCapture(0)
-            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-            cap.set(cv2.CAP_PROP_FPS, 60)
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            return cap
+            try:
+                cap = cv2.VideoCapture(0, cv2.CAP_DSHOW) if os.name == 'nt' else cv2.VideoCapture(0)
+                if not cap.isOpened():
+                    cap = cv2.VideoCapture(0)
+                if not cap.isOpened():
+                    return None
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                cap.set(cv2.CAP_PROP_FPS, 60)
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                return cap
+            except Exception as e:
+                print(f"[PIPO Vision] Camera initialization error: {e}")
+                return None
 
         cap = open_camera()
-        consecutive_drops = 0
 
-        # Background Ingestion Worker Thread
+        # Background Ingestion Worker Thread with robust watchdog
         def ingestion_worker():
-            nonlocal cap, consecutive_drops
+            nonlocal cap
             while self.running:
-                if not cap.isOpened():
-                    time.sleep(0.5)
-                    cap = open_camera()
-                    continue
-
-                ret, raw_frame = cap.read()
-                if not ret:
-                    consecutive_drops += 1
-                    if consecutive_drops >= 5:
-                        print("[PIPO Vision] Watchdog: 5 dropped frames. Recovering camera pipeline...")
-                        cap.release()
-                        time.sleep(0.2)
+                try:
+                    if cap is None or not cap.isOpened():
+                        time.sleep(1.0)
+                        if cap is not None:
+                            try:
+                                cap.release()
+                            except Exception:
+                                pass
                         cap = open_camera()
-                        consecutive_drops = 0
-                    time.sleep(0.005)
-                    continue
+                        continue
 
-                consecutive_drops = 0
-                self._frame_buffer.append(raw_frame)
+                    ret, raw_frame = cap.read()
+                    if not ret or raw_frame is None:
+                        print("[PIPO Vision] Watchdog: cap.read() failed. Forcing cap.release(), waiting 1s, and reinitializing...")
+                        try:
+                            cap.release()
+                        except Exception:
+                            pass
+                        time.sleep(1.0)
+                        cap = open_camera()
+                        continue
+
+                    self._frame_buffer.append(raw_frame)
+                except Exception as err:
+                    print(f"[PIPO Vision] Watchdog exception in ingestion loop: {err}. Releasing and reinitializing in 1s...")
+                    if cap is not None:
+                        try:
+                            cap.release()
+                        except Exception:
+                            pass
+                    time.sleep(1.0)
+                    cap = open_camera()
 
         ingestion_thread = threading.Thread(target=ingestion_worker, daemon=True)
         ingestion_thread.start()
 
         # Processing Loop
         while self.running:
-            if self._frame_buffer:
-                raw_frame = self._frame_buffer.pop()
-                flipped = cv2.flip(raw_frame, 1)
-                self.process_frame(flipped)
-                asyncio.run_coroutine_threadsafe(self.broadcast(), loop)
-            else:
-                time.sleep(0.002)
+            try:
+                if self._frame_buffer:
+                    raw_frame = self._frame_buffer.pop()
+                    flipped = cv2.flip(raw_frame, 1)
+                    self.process_frame(flipped)
+                    target_loop = self._server_loop or self._async_loop
+                    if target_loop and not target_loop.is_closed():
+                        try:
+                            asyncio.run_coroutine_threadsafe(self.broadcast(), target_loop)
+                        except Exception:
+                            pass
+                else:
+                    time.sleep(0.002)
+            except Exception as e:
+                print(f"[PIPO Vision] Frame processing error: {e}")
+                time.sleep(0.01)
 
-        cap.release()
+        if cap is not None:
+            try:
+                cap.release()
+            except Exception:
+                pass

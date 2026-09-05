@@ -9,6 +9,7 @@ import uvicorn
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.websockets import WebSocketDisconnect
 from starlette.middleware.base import BaseHTTPMiddleware
 from core.gesture_engine import GestureEngine
 
@@ -26,15 +27,50 @@ app.add_middleware(NoCacheMiddleware)
 
 gesture_engine = GestureEngine()
 
+@app.on_event("startup")
+async def on_startup():
+    loop = asyncio.get_running_loop()
+    gesture_engine.set_server_loop(loop)
+    asyncio.create_task(keepalive_telemetry_loop())
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    gesture_engine.running = False
+
+async def keepalive_telemetry_loop():
+    while gesture_engine.running:
+        try:
+            now = asyncio.get_event_loop().time()
+            if now - gesture_engine.last_broadcast_time > 0.05:
+                await gesture_engine.broadcast()
+        except Exception:
+            pass
+        await asyncio.sleep(0.033)
+
+@app.websocket("/ws/telemetry")
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    await gesture_engine.register(websocket)
+    try:
+        await websocket.accept()
+        await gesture_engine.register(websocket)
+    except WebSocketDisconnect:
+        pass
+    except (ConnectionResetError, RuntimeError):
+        pass
+    except Exception:
+        pass
 
 @app.websocket("/ws/live_feed")
 async def live_feed_websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    await gesture_engine.register_live_feed(websocket)
+    try:
+        await websocket.accept()
+        await gesture_engine.register_live_feed(websocket)
+    except WebSocketDisconnect:
+        pass
+    except (ConnectionResetError, RuntimeError):
+        pass
+    except Exception:
+        pass
 
 @app.get("/video_feed")
 async def video_feed():
@@ -55,9 +91,7 @@ def cleanup_cache_on_exit():
 atexit.register(cleanup_cache_on_exit)
 
 def start_vision():
-    loop = asyncio.new_event_loop()
-    threading.Thread(target=loop.run_forever, daemon=True).start()
-    gesture_engine.run_capture(loop)
+    gesture_engine.run_capture()
 
 if __name__ == "__main__":
     print("\n" + "="*55)
